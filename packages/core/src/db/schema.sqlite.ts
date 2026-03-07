@@ -61,6 +61,7 @@ export const sessions = sqliteTable(
         'running',
         'stopping',
         'awaiting_permission',
+        'awaiting_input',
         'timed_out',
         'completed',
         'failed',
@@ -191,6 +192,7 @@ export const tasks = sqliteTable(
         'running',
         'stopping',
         'awaiting_permission',
+        'awaiting_input',
         'timed_out',
         'completed',
         'failed',
@@ -261,7 +263,14 @@ export const messages = sqliteTable(
 
     // Materialized for queries
     type: text('type', {
-      enum: ['user', 'assistant', 'system', 'file-history-snapshot', 'permission_request'],
+      enum: [
+        'user',
+        'assistant',
+        'system',
+        'file-history-snapshot',
+        'permission_request',
+        'input_request',
+      ],
     }).notNull(),
     role: text('role', {
       enum: ['user', 'assistant', 'system'],
