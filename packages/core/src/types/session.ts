@@ -326,7 +326,7 @@ export interface Session {
    * Default behavior: Callbacks enabled with default template.
    */
   callback_config?: {
-    /** Enable/disable child completion callbacks (default: true) */
+    /** Enable/disable child completion callbacks (default: true for spawn, false for create) */
     enabled?: boolean;
     /** Custom Handlebars template for callback messages */
     template?: string;
@@ -334,6 +334,26 @@ export interface Session {
     include_last_message?: boolean;
     /** Whether to include original spawn prompt in callback (default: false) */
     include_original_prompt?: boolean;
+    /**
+     * Session ID to notify on completion (for remote session callbacks)
+     *
+     * When set, completion callbacks are sent to this session instead of
+     * (or in addition to) the genealogy parent. This enables cross-worktree
+     * callbacks where a session creates another session on a different worktree
+     * and wants to be notified when it completes.
+     *
+     * Defaults to the creating session's ID when enableCallback is true
+     * in agor_sessions_create.
+     */
+    callback_session_id?: SessionID;
+    /**
+     * User ID of the person who set up this callback.
+     *
+     * Used as queued_by_user_id when the callback is delivered, so the
+     * resulting task is attributed to the callback setter, not the target
+     * session owner. Execution still runs as the target session's Unix user.
+     */
+    callback_created_by?: string;
   };
 
   // ===== Archive State =====

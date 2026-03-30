@@ -417,6 +417,7 @@ import { createUploadMiddleware } from './utils/upload';
 import {
   ensureCanCreateSession,
   ensureCanPrompt,
+  ensureCanPromptSession,
   ensureCanView,
   ensureSessionImmutability,
   ensureWorktreePermission,
@@ -3685,6 +3686,22 @@ async function main() {
             }
           }
 
+          // Validate user has prompt permission on callback target session's worktree
+          const cbConfig = (context.data as Record<string, unknown> | undefined)?.callback_config as
+            | { callback_session_id?: string }
+            | undefined;
+          if (cbConfig?.callback_session_id) {
+            // Use authenticated user, NOT context.data.created_by (which could be client-supplied)
+            const authenticatedUserId =
+              (context.params as { user?: { user_id: string } }).user?.user_id || 'anonymous';
+            await ensureCanPromptSession(
+              cbConfig.callback_session_id,
+              authenticatedUserId,
+              context.app,
+              worktreeRepository
+            );
+          }
+
           return context;
         },
       ],
@@ -3698,6 +3715,22 @@ async function main() {
               ensureWorktreePermission('all', 'update sessions'), // Require 'all' permission
             ]
           : []),
+        // Validate user has prompt permission on callback target session's worktree
+        async (context) => {
+          const patchCbConfig = (context.data as Record<string, unknown> | undefined)
+            ?.callback_config as { callback_session_id?: string } | undefined;
+          if (patchCbConfig?.callback_session_id) {
+            const userId =
+              (context.params as { user?: { user_id: string } }).user?.user_id || 'anonymous';
+            await ensureCanPromptSession(
+              patchCbConfig.callback_session_id,
+              userId,
+              context.app,
+              worktreeRepository
+            );
+          }
+          return context;
+        },
       ],
       remove: [
         ...(worktreeRbacEnabled
