@@ -1,4 +1,5 @@
-import type { AgenticToolName, BoardID, WorktreeID } from '@agor/core/types';
+import { WorktreeRepository } from '@agor/core/db';
+import type { AgenticToolName, BoardID, UUID, WorktreeID } from '@agor/core/types';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -76,12 +77,18 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     'agor_worktrees_create',
     {
       description:
-        'Create a worktree (and optional branch) for a repository, with required board placement',
+        'Create a worktree (and optional branch) for a repository, with required board placement. ' +
+        'To fork from an existing branch with a unique worktree name, set sourceBranch to the base branch ' +
+        'and worktreeName to your desired unique name (e.g., sourceBranch="issue-282", worktreeName="issue-282-review-1").',
       inputSchema: z.object({
         repoId: z.string().describe('Repository ID where the worktree will be created'),
         worktreeName: z
           .string()
-          .describe('Slug name for the worktree directory (lowercase letters, numbers, hyphens)'),
+          .describe(
+            'Slug name for the worktree directory (lowercase letters, numbers, hyphens). ' +
+              'If the name conflicts with an existing worktree, a numeric suffix is auto-appended (e.g., "my-feature-2"). ' +
+              'Set autoSuffix=false to get an error on conflict instead.'
+          ),
         boardId: z
           .string()
           .describe(
@@ -91,7 +98,9 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .string()
           .optional()
           .describe(
-            'Git ref to checkout. Defaults to the worktree name when creating a new branch.'
+            'Git branch name to create or checkout. Defaults to worktreeName when creating a new branch. ' +
+              'Set this to create a branch with a different name than the worktree directory. ' +
+              'Example: worktreeName="review-1", ref="issue-282-review-1" creates directory "review-1" on branch "issue-282-review-1".'
           ),
         refType: z
           .enum(['branch', 'tag'])
@@ -100,7 +109,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         createBranch: z
           .boolean()
           .optional()
-          .describe('Whether to create a new branch. Defaults to true unless ref is a commit SHA.'),
+          .describe(
+            'Whether to create a new branch (default: true). Set to false to checkout an existing branch. ' +
+              'Auto-set to false when ref is a commit SHA.'
+          ),
         pullLatest: z
           .boolean()
           .optional()
@@ -111,7 +123,16 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .string()
           .optional()
           .describe(
-            'Base branch when creating a new branch (defaults to the repo default branch).'
+            'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
+              'The new branch will be created from the tip of this branch. ' +
+              'Must exist on the remote (origin) or locally.'
+          ),
+        autoSuffix: z
+          .boolean()
+          .optional()
+          .describe(
+            'If worktreeName conflicts with an existing worktree, automatically append a numeric suffix ' +
+              '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to true. Set to false to get an error on conflict instead.'
           ),
         issueUrl: z.string().optional().describe('Issue URL to associate with the worktree.'),
         pullRequestUrl: z
@@ -122,8 +143,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     },
     async (args) => {
       const repoId = coerceString(args.repoId)!;
-      const worktreeName = coerceString(args.worktreeName)!;
+      let worktreeName = coerceString(args.worktreeName)!;
+      const originalName = worktreeName;
       const boardId = coerceString(args.boardId)!;
+      const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
       if (!WORKTREE_NAME_PATTERN.test(worktreeName)) {
         throw new Error('worktreeName must use lowercase letters, numbers, or hyphens');
@@ -135,6 +158,22 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         repo = await reposService.get(repoId);
       } catch {
         throw new Error(`Repository ${repoId} not found`);
+      }
+
+      // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
+      // Uses direct DB query to bypass Feathers pagination limits
+      if (autoSuffix) {
+        const worktreeRepo = new WorktreeRepository(ctx.db);
+        const activeNames = await worktreeRepo.getActiveNamesByRepo(repoId as UUID);
+        const existingNames = new Set(activeNames);
+
+        if (existingNames.has(worktreeName)) {
+          let suffix = 2;
+          while (existingNames.has(`${worktreeName}-${suffix}`)) {
+            suffix++;
+          }
+          worktreeName = `${worktreeName}-${suffix}`;
+        }
       }
 
       const defaultBranch =
@@ -164,6 +203,11 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       const issueUrl = normalizeOptionalHttpUrl(args.issueUrl, 'issueUrl');
       const pullRequestUrl = normalizeOptionalHttpUrl(args.pullRequestUrl, 'pullRequestUrl');
 
+      // If auto-suffix changed the ref (branch name defaults to worktreeName), update it
+      if (createBranch && !coerceString(args.ref) && worktreeName !== originalName) {
+        ref = worktreeName;
+      }
+
       const worktree = await reposService.createWorktree(
         repoId,
         {
@@ -179,6 +223,14 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         },
         ctx.baseServiceParams
       );
+
+      // Make it very clear when auto-suffix was applied
+      if (worktreeName !== originalName) {
+        return textResult({
+          ...worktree,
+          _note: `Name '${originalName}' was already taken. Created as '${worktreeName}' instead (autoSuffix applied).`,
+        });
+      }
       return textResult(worktree);
     }
   );
