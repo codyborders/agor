@@ -212,10 +212,12 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 placeholder="Select board (optional)..."
                 allowClear
                 disabled={!canEdit}
-                options={boards.map((board) => ({
-                  value: board.board_id,
-                  label: `${board.icon || '📋'} ${board.name}`,
-                }))}
+                options={boards
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((board) => ({
+                    value: board.board_id,
+                    label: `${board.icon || '📋'} ${board.name}`,
+                  }))}
               />
             </Form.Item>
 

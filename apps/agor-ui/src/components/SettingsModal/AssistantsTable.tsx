@@ -381,10 +381,12 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       value: CREATE_NEW_BOARD,
       label: '+ Create a new board for this assistant (Recommended)',
     },
-    ...boards.map((board: Board) => ({
-      value: board.board_id,
-      label: `${board.icon || '\u{1F4CB}'} ${board.name}`,
-    })),
+    ...boards
+      .sort((a: Board, b: Board) => a.name.localeCompare(b.name))
+      .map((board: Board) => ({
+        value: board.board_id,
+        label: `${board.icon || '\u{1F4CB}'} ${board.name}`,
+      })),
   ];
 
   return (
