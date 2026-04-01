@@ -440,16 +440,24 @@ export const App: React.FC<AppProps> = ({
   const handleSessionClick = (sessionId: string) => {
     setSelectedSessionId(sessionId);
 
-    // Clear the ready_for_prompt flag when opening the conversation
     const session = sessionById.get(sessionId);
-    if (session?.ready_for_prompt) {
-      onUpdateSession?.(sessionId, { ready_for_prompt: false });
+
+    // Best-effort: clear highlight flags when opening the conversation.
+    // These updates may fail silently if the user lacks write permission (e.g. read-only
+    // access via RBAC). We suppress errors to avoid spurious toasts for read-only users.
+    if (client && session?.ready_for_prompt) {
+      client
+        .service('sessions')
+        .patch(sessionId, { ready_for_prompt: false })
+        .catch(() => {});
     }
 
-    // Clear the worktree's needs_attention flag when user interacts with it
     const worktree = session?.worktree_id ? worktreeById.get(session.worktree_id) : undefined;
-    if (worktree?.needs_attention) {
-      onUpdateWorktree?.(worktree.worktree_id, { needs_attention: false });
+    if (client && worktree?.needs_attention) {
+      client
+        .service('worktrees')
+        .patch(worktree.worktree_id, { needs_attention: false })
+        .catch(() => {});
     }
   };
 
