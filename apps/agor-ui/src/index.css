@@ -5,12 +5,13 @@
 
 /* Global styles for Agor UI */
 
-/* Fix Ant Design Collapse header title overflow for ellipsis truncation */
+/* Prevent long text from causing horizontal scroll in collapse headers,
+   but allow vertical overflow so flex-wrapped pill rows aren't clipped (#869). */
 .ant-collapse-header {
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
-.ant-collapse-header .ant-collapse-title {
+.ant-collapse-header > .ant-collapse-title {
   overflow: hidden;
   min-width: 0;
 }
