@@ -1,5 +1,12 @@
 import { WorktreeRepository, type WorktreeWithZoneAndSessions } from '@agor/core/db';
-import type { AgenticToolName, Board, ZoneBoardObject } from '@agor/core/types';
+import {
+  type AgenticToolName,
+  type Board,
+  getSessionType,
+  type Session,
+  type SessionType,
+  type ZoneBoardObject,
+} from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
@@ -36,11 +43,20 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Filter to show ONLY archived sessions. When true, returns only archived sessions. Overrides includeArchived.'
           ),
+        sessionType: z
+          .enum(['gateway', 'scheduled', 'agent'])
+          .optional()
+          .describe(
+            "Filter by session type. 'gateway' = sessions from messaging integrations (Slack, Discord, GitHub). 'scheduled' = sessions created by worktree schedules. 'agent' = manually created sessions (excludes gateway and scheduled)."
+          ),
       }),
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      if (args.limit) query.$limit = args.limit;
+      // When sessionType is set, skip service-level pagination (it runs before our filter)
+      // and apply the requested limit ourselves after filtering.
+      const requestedLimit = args.limit;
+      if (!args.sessionType && requestedLimit) query.$limit = requestedLimit;
       if (args.status) query.status = args.status;
       if (args.boardId) query.board_id = args.boardId;
       if (args.worktreeId) query.worktree_id = args.worktreeId;
@@ -49,8 +65,23 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       } else if (!args.includeArchived) {
         query.archived = false;
       }
-      const sessions = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
-      return textResult(sessions);
+      const result = await ctx.app.service('sessions').find({ query, ...ctx.baseServiceParams });
+
+      // Apply sessionType filter (post-query since custom_context/scheduled_from_worktree aren't in query schema)
+      if (args.sessionType) {
+        const targetType = args.sessionType as SessionType;
+        const filterFn = (s: Session) => getSessionType(s) === targetType;
+        const allData: Session[] = Array.isArray(result) ? result : result.data;
+        const filtered = allData.filter(filterFn);
+        const limited = requestedLimit ? filtered.slice(0, requestedLimit) : filtered;
+
+        if (Array.isArray(result)) {
+          return textResult(limited);
+        }
+        return textResult({ ...result, data: limited, total: filtered.length });
+      }
+
+      return textResult(result);
     }
   );
 
@@ -902,6 +933,131 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         success: true,
         unarchivedCount,
         message: `Unarchived ${unarchivedCount} session(s).`,
+      });
+    }
+  );
+
+  // Tool 10: agor_sessions_bulk_archive
+  server.registerTool(
+    'agor_sessions_bulk_archive',
+    {
+      description:
+        'Archive multiple sessions matching filter criteria. Supports filtering by session type (gateway/scheduled/agent), age, status, board, and worktree. Returns a dry-run preview by default — set dryRun to false to actually archive. Respects RBAC: sessions the current user cannot modify are skipped and reported as errors.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.object({
+        sessionType: z
+          .enum(['gateway', 'scheduled', 'agent'])
+          .optional()
+          .describe(
+            "Filter by session type. 'gateway' = messaging integrations, 'scheduled' = cron-triggered, 'agent' = manually created."
+          ),
+        olderThanDays: z
+          .number()
+          .int()
+          .positive()
+          .max(365)
+          .optional()
+          .describe('Only archive sessions last updated more than this many days ago'),
+        status: z
+          .enum(['idle', 'running', 'completed', 'failed'])
+          .optional()
+          .describe('Only archive sessions with this status'),
+        boardId: z.string().optional().describe('Only archive sessions on this board'),
+        worktreeId: z.string().optional().describe('Only archive sessions in this worktree'),
+        dryRun: z
+          .boolean()
+          .optional()
+          .describe(
+            'Preview which sessions would be archived without actually archiving them (default: true)'
+          ),
+      }),
+    },
+    async (args) => {
+      const dryRun = args.dryRun !== false;
+
+      // Build service query for non-archived sessions
+      const query: Record<string, unknown> = { archived: false };
+      if (args.status) query.status = args.status;
+      if (args.boardId) query.board_id = args.boardId;
+      if (args.worktreeId) query.worktree_id = args.worktreeId;
+
+      // Fetch all matching sessions (paginate through all results)
+      const allSessions: Session[] = [];
+      let skip = 0;
+      const pageSize = 200;
+
+      while (true) {
+        const result = await ctx.app
+          .service('sessions')
+          .find({ query: { ...query, $limit: pageSize, $skip: skip }, ...ctx.baseServiceParams });
+        const page: Session[] = Array.isArray(result) ? result : result.data;
+        allSessions.push(...page);
+        if (page.length < pageSize) break;
+        skip += pageSize;
+      }
+
+      // Apply post-query filters (sessionType, age)
+      const cutoffDate = args.olderThanDays
+        ? new Date(Date.now() - args.olderThanDays * 24 * 60 * 60 * 1000)
+        : null;
+
+      const toArchive = allSessions.filter((s) => {
+        if (args.sessionType && getSessionType(s) !== args.sessionType) return false;
+        if (cutoffDate) {
+          const lastUpdated = new Date(s.last_updated || s.created_at);
+          if (lastUpdated >= cutoffDate) return false;
+        }
+        return true;
+      });
+
+      if (dryRun) {
+        return textResult({
+          dryRun: true,
+          wouldArchive: toArchive.length,
+          totalMatched: allSessions.length,
+          ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
+          sessions: toArchive.map((s) => ({
+            session_id: s.session_id,
+            title: s.title,
+            status: s.status,
+            session_type: getSessionType(s),
+            last_updated: s.last_updated,
+            created_at: s.created_at,
+            worktree_id: s.worktree_id,
+          })),
+          message: `Would archive ${toArchive.length} session(s). Set dryRun=false to proceed.`,
+        });
+      }
+
+      // Archive each session (through service layer for RBAC)
+      let archivedCount = 0;
+      const errors: { session_id: string; error: string }[] = [];
+
+      for (const session of toArchive) {
+        try {
+          await ctx.app
+            .service('sessions')
+            .patch(
+              session.session_id,
+              { archived: true, archived_reason: 'manual' },
+              ctx.baseServiceParams
+            );
+          archivedCount++;
+        } catch (error) {
+          errors.push({
+            session_id: session.session_id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      return textResult({
+        success: true,
+        archivedCount,
+        failedCount: errors.length,
+        ...(cutoffDate && { cutoffDate: cutoffDate.toISOString() }),
+        errors: errors.length > 0 ? errors : undefined,
+        message: `Archived ${archivedCount} session(s).${errors.length > 0 ? ` ${errors.length} failed (insufficient permissions or other errors).` : ''}`,
       });
     }
   );
