@@ -128,6 +128,69 @@ export const useBoardObjects = ({
   );
 
   /**
+   * Delete a board object
+   */
+  const deleteObject = useCallback(
+    async (objectId: string) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard || !client) return;
+
+      // Mark as deleted to prevent re-appearance during WebSocket updates
+      deletedObjectsRef.current.add(objectId);
+
+      // Optimistic removal
+      setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+
+      try {
+        await client.service('boards').patch(currentBoard.board_id, {
+          _action: 'removeObject',
+          objectId,
+        } as unknown as Partial<Board>);
+
+        // After successful deletion, we can remove from the tracking set
+        // (the object will no longer exist in board.objects)
+        setTimeout(() => {
+          deletedObjectsRef.current.delete(objectId);
+        }, 1000);
+      } catch (error) {
+        console.error('Failed to delete object:', error);
+        // Rollback: remove from deleted set
+        deletedObjectsRef.current.delete(objectId);
+      }
+    },
+    [client, setNodes, deletedObjectsRef] // Removed board dependency
+  );
+
+  /**
+   * Delete an artifact entity (filesystem + board object + DB record).
+   * Uses the artifacts service's lifecycle-safe remove method.
+   */
+  const deleteArtifact = useCallback(
+    async (objectId: string, artifactId: string) => {
+      if (!client) return;
+
+      // Mark as deleted to prevent re-appearance during WebSocket updates
+      deletedObjectsRef.current.add(objectId);
+
+      // Optimistic removal
+      setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+
+      try {
+        // Lifecycle-safe: removes filesystem + board object + DB record
+        await client.service('artifacts').remove(artifactId);
+
+        setTimeout(() => {
+          deletedObjectsRef.current.delete(objectId);
+        }, 1000);
+      } catch (error) {
+        console.error('Failed to delete artifact:', error);
+        deletedObjectsRef.current.delete(objectId);
+      }
+    },
+    [client, setNodes, deletedObjectsRef]
+  );
+
+  /**
    * Convert board.objects to React Flow nodes
    */
   const getBoardObjectNodes = useCallback((): Node[] => {
@@ -149,6 +212,55 @@ export const useBoardObjects = ({
         return hasValidPosition;
       })
       .map(([objectId, objectData]) => {
+        // App node (live Sandpack preview)
+        if (objectData.type === 'app') {
+          return {
+            id: objectId,
+            type: 'appNode',
+            position: { x: objectData.x, y: objectData.y },
+            draggable: true,
+            selectable: true,
+            zIndex: 400, // Above markdown (300), below worktrees (500)
+            className: eraserMode ? 'eraser-mode' : undefined,
+            data: {
+              objectId,
+              title: objectData.title,
+              description: objectData.description,
+              template: objectData.template,
+              files: objectData.files,
+              dependencies: objectData.dependencies,
+              entryFile: objectData.entryFile,
+              showEditor: objectData.showEditor,
+              showConsole: objectData.showConsole,
+              width: objectData.width,
+              height: objectData.height,
+              onUpdate: handleUpdateObject,
+              onDelete: deleteObject,
+            },
+          };
+        }
+
+        // Artifact node (filesystem-backed Sandpack preview)
+        if (objectData.type === 'artifact') {
+          return {
+            id: objectId,
+            type: 'artifactNode',
+            position: { x: objectData.x, y: objectData.y },
+            draggable: true,
+            selectable: true,
+            zIndex: 400,
+            className: eraserMode ? 'eraser-mode' : undefined,
+            data: {
+              objectId,
+              artifactId: objectData.artifact_id,
+              width: objectData.width,
+              height: objectData.height,
+              onUpdate: handleUpdateObject,
+              onDeleteArtifact: deleteArtifact,
+            },
+          };
+        }
+
         // Markdown note node
         if (objectData.type === 'markdown') {
           return {
@@ -225,6 +337,8 @@ export const useBoardObjects = ({
     sessionsByWorktree,
     handleUpdateObject,
     deleteZone,
+    deleteObject,
+    deleteArtifact,
     eraserMode,
     onEditMarkdown,
   ]);
@@ -287,40 +401,6 @@ export const useBoardObjects = ({
       }
     },
     [client, setNodes, handleUpdateObject] // Removed board dependency
-  );
-
-  /**
-   * Delete a board object
-   */
-  const deleteObject = useCallback(
-    async (objectId: string) => {
-      const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
-
-      // Mark as deleted to prevent re-appearance during WebSocket updates
-      deletedObjectsRef.current.add(objectId);
-
-      // Optimistic removal
-      setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
-
-      try {
-        await client.service('boards').patch(currentBoard.board_id, {
-          _action: 'removeObject',
-          objectId,
-        } as unknown as Partial<Board>);
-
-        // After successful deletion, we can remove from the tracking set
-        // (the object will no longer exist in board.objects)
-        setTimeout(() => {
-          deletedObjectsRef.current.delete(objectId);
-        }, 1000);
-      } catch (error) {
-        console.error('Failed to delete object:', error);
-        // Rollback: remove from deleted set
-        deletedObjectsRef.current.delete(objectId);
-      }
-    },
-    [client, setNodes, deletedObjectsRef] // Removed board dependency
   );
 
   /**

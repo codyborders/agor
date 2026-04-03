@@ -67,6 +67,8 @@ import CardNode from '../CardNode';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import WorktreeCard from '../WorktreeCard';
+import { AppNode } from './canvas/AppNode';
+import { ArtifactNode } from './canvas/ArtifactNode';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { CursorNode } from './canvas/CursorNode';
 import { MarkdownNode } from './canvas/MarkdownNode';
@@ -254,6 +256,8 @@ const nodeTypes = {
   cursor: CursorNode,
   comment: CommentNode,
   markdown: MarkdownNode,
+  appNode: AppNode,
+  artifactNode: ArtifactNode,
 };
 
 const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
@@ -1009,6 +1013,9 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setNodes((currentNodes) => {
         const existingZones = currentNodes.filter((n) => n.type === 'zone');
         const existingMarkdown = currentNodes.filter((n) => n.type === 'markdown');
+        const existingApps = currentNodes.filter(
+          (n) => n.type === 'appNode' || n.type === 'artifactNode'
+        );
         const existingCursors = currentNodes.filter((n) => n.type === 'cursor');
         const existingComments = currentNodes.filter((n) => n.type === 'comment');
 
@@ -1019,6 +1026,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           ...existingZones,
           ...updatedWorktrees,
           ...updatedCards,
+          ...existingApps,
           ...existingMarkdown,
           ...existingCursors,
           ...existingComments,
@@ -1067,13 +1075,14 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         markdown: nodes.filter((n) => n.type === 'markdown'),
         worktrees: nodes.filter((n) => n.type === 'worktreeNode'),
         cards: nodes.filter((n) => n.type === 'cardNode'),
+        apps: nodes.filter((n) => n.type === 'appNode' || n.type === 'artifactNode'),
         comments: nodes.filter((n) => n.type === 'comment'),
         cursors: nodes.filter((n) => n.type === 'cursor'),
       };
     }, []);
 
     // Helper: Apply consistent z-ordering to nodes
-    // Z-order: zones < worktrees/cards < markdown < comments < cursors (cursors always on top)
+    // Z-order: zones < worktrees/cards < apps/artifacts < markdown < comments < cursors
     const applyZOrder = useCallback(
       (
         zones: Node[],
@@ -1081,12 +1090,14 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         worktrees: Node[],
         cards: Node[],
         comments: Node[],
-        cursors: Node[]
+        cursors: Node[],
+        apps: Node[] = []
       ) => {
         return sanitizeOrphanedParents([
           ...zones,
           ...worktrees,
           ...cards,
+          ...apps,
           ...markdown,
           ...comments,
           ...cursors,
@@ -1095,7 +1106,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       [sanitizeOrphanedParents]
     );
 
-    // Sync ZONE and MARKDOWN nodes separately
+    // Sync ZONE, MARKDOWN, APP, and ARTIFACT nodes from board objects
     useEffect(() => {
       if (isDraggingRef.current) return;
 
@@ -1104,7 +1115,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setNodes((currentNodes) => {
         const { worktrees, cards, comments, cursors } = partitionNodesByType(currentNodes);
 
-        // Separate zones and markdown from boardObjectNodes
+        // Separate board object node types
         const zones = boardObjectNodes
           .filter((n) => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
           .map((newZone) => {
@@ -1119,7 +1130,18 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             return { ...newMarkdown, selected: existingMarkdown?.selected };
           });
 
-        return applyZOrder(zones, markdown, worktrees, cards, comments, cursors);
+        const apps = boardObjectNodes
+          .filter(
+            (n) =>
+              (n.type === 'appNode' || n.type === 'artifactNode') &&
+              !deletedObjectsRef.current.has(n.id)
+          )
+          .map((newApp) => {
+            const existingApp = currentNodes.find((n) => n.id === newApp.id);
+            return { ...newApp, selected: existingApp?.selected };
+          });
+
+        return applyZOrder(zones, markdown, worktrees, cards, comments, cursors, apps);
       });
     }, [getBoardObjectNodes, setNodes, applyZOrder, partitionNodesByType]);
 
@@ -1142,7 +1164,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (isDraggingRef.current) return;
 
       setNodes((currentNodes) => {
-        const { zones, markdown, worktrees, cards, cursors } = partitionNodesByType(currentNodes);
+        const { zones, markdown, worktrees, cards, apps, cursors } =
+          partitionNodesByType(currentNodes);
 
         // Apply local position overrides to comment nodes (to prevent flicker during drag)
         const commentsWithLocalPositions = commentNodes.map((newNode) => {
@@ -1189,7 +1212,15 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return newNode;
         });
 
-        return applyZOrder(zones, markdown, worktrees, cards, commentsWithLocalPositions, cursors);
+        return applyZOrder(
+          zones,
+          markdown,
+          worktrees,
+          cards,
+          commentsWithLocalPositions,
+          cursors,
+          apps
+        );
       });
     }, [commentNodes, setNodes, applyZOrder, partitionNodesByType]);
 
