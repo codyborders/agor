@@ -3,6 +3,72 @@ import { z } from 'zod';
 import { textResult } from '../server.js';
 import { ToolRegistry } from '../tool-registry.js';
 
+/**
+ * Registered tool entry from the SDK's internal _registeredTools map.
+ * Cast required because this is a private SDK field.
+ */
+interface RegisteredTool {
+  enabled: boolean;
+  inputSchema?: {
+    safeParse: (data: unknown) => { success: boolean; data?: unknown; error?: unknown };
+  };
+  handler: (args: unknown, extra: unknown) => Promise<unknown>;
+}
+
+/**
+ * Resolve tool arguments for the agor_execute_tool proxy.
+ *
+ * Handles two formats agents may use:
+ *   1. Properly nested:  { tool_name: "X", arguments: { boardId: "..." } }
+ *   2. Flattened:        { tool_name: "X", boardId: "..." }
+ *
+ * When `arguments` is empty/missing, extra top-level keys (preserved via
+ * .passthrough()) are collected as a fallback.
+ *
+ * If the target tool has an inputSchema, the resolved args are validated
+ * through it — mirroring the SDK's own validateToolInput step that the
+ * proxy would otherwise bypass.
+ */
+function resolveToolArgs(
+  proxyArgs: Record<string, unknown>,
+  tool: RegisteredTool,
+  toolName: string
+): Record<string, unknown> {
+  let toolArgs: Record<string, unknown> = (proxyArgs.arguments as Record<string, unknown>) ?? {};
+
+  if (Object.keys(toolArgs).length === 0) {
+    // No nested arguments — check for flattened params at top level
+    const extraArgs: Record<string, unknown> = {};
+    for (const key of Object.keys(proxyArgs)) {
+      if (key !== 'tool_name' && key !== 'arguments') {
+        extraArgs[key] = proxyArgs[key];
+      }
+    }
+    if (Object.keys(extraArgs).length > 0) {
+      toolArgs = extraArgs;
+    }
+  }
+
+  // Validate through target tool's input schema. The proxy bypasses the SDK's
+  // normal validateToolInput step, so we parse explicitly for type coercion
+  // and proper error messages.
+  if (tool.inputSchema && typeof tool.inputSchema.safeParse === 'function') {
+    const parseResult = tool.inputSchema.safeParse(toolArgs);
+    if (parseResult.success) {
+      return parseResult.data as Record<string, unknown>;
+    }
+    // Surface validation errors instead of letting them manifest as
+    // confusing downstream failures (e.g. "Board not found: undefined").
+    const errorDetail =
+      parseResult.error && typeof parseResult.error === 'object' && 'message' in parseResult.error
+        ? (parseResult.error as { message: string }).message
+        : JSON.stringify(parseResult.error);
+    throw new Error(`Invalid arguments for tool ${toolName}: ${errorDetail}`);
+  }
+
+  return toolArgs;
+}
+
 export function registerSearchTools(server: McpServer, registry: ToolRegistry): void {
   server.registerTool(
     'agor_search_tools',
@@ -75,24 +141,22 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
     {
       description:
         'Execute an Agor MCP tool by name. Use agor_search_tools first to discover available tools and their input schemas, then call this to invoke them.',
-      inputSchema: z.object({
-        tool_name: z.string().describe('The tool name to execute (e.g. "agor_worktrees_list")'),
-        arguments: z
-          .record(z.string(), z.unknown())
-          .optional()
-          .describe('Arguments to pass to the tool, matching its input schema'),
-      }),
+      inputSchema: z
+        .object({
+          tool_name: z.string().describe('The tool name to execute (e.g. "agor_worktrees_list")'),
+          arguments: z
+            .record(z.string(), z.unknown())
+            .optional()
+            .describe('Arguments to pass to the tool, matching its input schema'),
+        })
+        .passthrough(),
     },
     async (args) => {
       const toolName = args.tool_name;
 
-      // Access the internal registered tools map (private SDK field, cast required)
-      type RegisteredToolsMap = Record<
-        string,
-        { enabled: boolean; handler: (args: unknown, extra: unknown) => Promise<unknown> }
-      >;
-      const registeredTools = (server as unknown as { _registeredTools: RegisteredToolsMap })
-        ._registeredTools;
+      const registeredTools = (
+        server as unknown as { _registeredTools: Record<string, RegisteredTool> }
+      )._registeredTools;
 
       const tool = registeredTools[toolName];
       if (!tool) {
@@ -110,8 +174,8 @@ export function registerSearchTools(server: McpServer, registry: ToolRegistry): 
       }
 
       try {
-        // Invoke the tool handler directly with provided arguments
-        const result = await tool.handler(args.arguments ?? {}, {});
+        const toolArgs = resolveToolArgs(args as Record<string, unknown>, tool, toolName);
+        const result = await tool.handler(toolArgs, {});
         return result as { content: Array<{ type: 'text'; text: string }> };
       } catch (error) {
         return {
