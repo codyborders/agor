@@ -129,6 +129,12 @@ export interface QuerySetupDeps {
 export interface InterruptibleQuery {
   interrupt(): Promise<void>;
   getContextUsage(): Promise<import('@agor/core/sdk').SDKControlGetContextUsageResponse>;
+  /**
+   * Signal that post-result control requests (like getContextUsage) are done.
+   * This releases the held AsyncIterable, allowing the SDK to close stdin.
+   * Must be called after the result event is fully processed.
+   */
+  releaseInput(): void;
   // biome-ignore lint/suspicious/noExplicitAny: SDK returns complex union of message types
   [Symbol.asyncIterator](): AsyncIterator<any>;
 }
@@ -631,10 +637,36 @@ export async function setupQuery(
     queryOptions.mcpServers ? JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers)) : 'none'
   );
 
+  // Wrap the string prompt in an AsyncIterable so the SDK treats this as a
+  // streaming-input query.  When a plain string is passed, the SDK sets
+  // `isSingleUserTurn = true` and closes stdin right after the first result
+  // event.  Even with an iterable, the SDK calls `transport.endInput()` once
+  // the iterable is fully consumed (after streamInput finishes).  So we must
+  // keep the iterable alive until AFTER post-result control requests like
+  // `getContextUsage()` complete.
+  //
+  // The iterable yields the user message, then blocks on a Promise that is
+  // resolved by calling `releaseInput()`.  This keeps stdin open until we
+  // explicitly signal that we're done with control requests.
+  let releaseInputResolve: (() => void) | undefined;
+  const inputHeldPromise = new Promise<void>((resolve) => {
+    releaseInputResolve = resolve;
+  });
+
+  async function* asUserMessageIterable(text: string) {
+    yield {
+      type: 'user' as const,
+      message: { role: 'user' as const, content: [{ type: 'text' as const, text }] },
+      parent_tool_use_id: null,
+    };
+    // Hold the iterable open until releaseInput() is called, keeping stdin alive
+    await inputHeldPromise;
+  }
+
   let result: AsyncGenerator<unknown>;
   try {
     result = query({
-      prompt,
+      prompt: asUserMessageIterable(prompt),
       // queryOptions uses Record<string,unknown> to accommodate undocumented fields (debug, apiKey)
       // that are valid at runtime but not in the public Options type
       options: queryOptions as unknown as Options,
@@ -653,10 +685,15 @@ export async function setupQuery(
   // Store stderr buffer getter for error reporting
   const getStderr = () => stderrBuffer;
 
-  // Cast to InterruptibleQuery - the SDK's query() returns an AsyncGenerator with interrupt() method
-  // This is safe because the SDK guarantees interrupt() exists at runtime
+  // Attach releaseInput() so callers can signal when post-result control requests are done.
+  // The SDK's query() returns an AsyncGenerator with interrupt()/getContextUsage() methods.
+  const queryObj = result as unknown as InterruptibleQuery;
+  queryObj.releaseInput = () => {
+    releaseInputResolve?.();
+  };
+
   return {
-    query: result as unknown as InterruptibleQuery,
+    query: queryObj,
     resolvedModel: model,
     getStderr,
     oauthServersNeedingAuth,
