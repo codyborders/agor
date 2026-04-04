@@ -94,9 +94,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     return `**[Agor system message]**
 
-\`/${command}\` command is not supported by the Claude Agent SDK.
-
-This is a CLI-only command that only works in the standalone Claude Code terminal application, not through Agor's API integration.`;
+\`/${command}\` is a CLI-only command that only works in the standalone Claude Code terminal, not through Agor's SDK integration.`;
   }
 
   /**
@@ -121,14 +119,17 @@ This is a CLI-only command that only works in the standalone Claude Code termina
     _chunkCallback?: (messageId: string, chunk: string) => void,
     abortController?: AbortController
   ): AsyncGenerator<ProcessedEvent> {
-    // Intercept CLI-only slash commands and return helpful messages
+    // Intercept slash commands that don't work via the Claude Agent SDK.
+    // Commands like /compact and /cost are handled natively by the SDK and pass through.
+    // Commands like /clear, /help, /usage are CLI-only and return "Unknown skill" errors
+    // from the SDK, so we intercept them with helpful messages instead.
     const trimmedPrompt = prompt.trim();
-    const cliOnlyMatch = trimmedPrompt.match(/^\/(\w+)(?:\s|$)/);
-    if (cliOnlyMatch) {
-      const command = cliOnlyMatch[1];
-      const cliOnlyCommands = ['login', 'cost', 'usage', 'help', 'compact', 'clear'];
+    const agorCommandMatch = trimmedPrompt.match(/^\/(\w+)(?:\s|$)/);
+    if (agorCommandMatch) {
+      const command = agorCommandMatch[1];
+      const agorInterceptedCommands = ['login', 'clear', 'help', 'usage'];
 
-      if (cliOnlyCommands.includes(command)) {
+      if (agorInterceptedCommands.includes(command)) {
         const helpMessage = this.buildCLICommandHelpMessage(command);
 
         // Yield synthetic complete message
