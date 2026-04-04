@@ -193,6 +193,19 @@ export interface User extends BaseUserFields {
 }
 
 /**
+ * User API Key - Public DTO for programmatic access keys.
+ * key_hash is internal to the DB layer and never exposed.
+ */
+export interface UserApiKey {
+  id: string;
+  user_id: UserID;
+  name: string;
+  prefix: string;
+  created_at: Date;
+  last_used_at?: Date;
+}
+
+/**
  * Create user input (password required, not stored in User type)
  */
 export interface CreateUserInput extends Partial<Omit<BaseUserFields, 'role'>> {

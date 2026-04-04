@@ -59,6 +59,7 @@ import {
 import {
   AuthenticationService,
   authenticate,
+  BadRequest,
   errorHandler,
   Forbidden,
   feathers,
@@ -408,6 +409,7 @@ import { createSessionsService } from './services/sessions';
 import { createTasksService } from './services/tasks';
 import { TerminalsService } from './services/terminals';
 import { createThreadSessionMapService } from './services/thread-session-map';
+import { createUserApiKeysService } from './services/user-api-keys';
 import { createUsersService } from './services/users';
 import { setupWorktreeOwnersService } from './services/worktree-owners.js';
 import { createWorktreesService } from './services/worktrees';
@@ -483,7 +485,9 @@ async function main() {
   // SECURITY: Disable anonymous authentication by default
   // Must explicitly set daemon.allowAnonymous=true in config to enable
   const allowAnonymous = config.daemon?.allowAnonymous === true;
-  const authStrategies = allowAnonymous ? ['jwt', 'anonymous'] : ['jwt'];
+  // api-key MUST be before jwt: JWT's parse() matches any Bearer token,
+  // so api-key needs first chance to intercept agor_sk_* tokens
+  const authStrategies = allowAnonymous ? ['api-key', 'jwt', 'anonymous'] : ['api-key', 'jwt'];
   const requireAuth = authenticate({ strategies: authStrategies });
 
   /**
@@ -616,6 +620,14 @@ async function main() {
     corsOriginOverride: process.env.CORS_ORIGIN,
   });
 
+  // Allow browser Private Network Access preflight (public iframe -> localhost daemon).
+  // Must run before cors() because cors can terminate OPTIONS requests early.
+  app.use((req, res, next) => {
+    if (req.headers['access-control-request-private-network'] === 'true') {
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+    next();
+  });
   app.use(
     cors({
       origin: corsOrigin,
@@ -4404,7 +4416,8 @@ async function main() {
 
   // Configure authentication options BEFORE creating service
   // Note: jwtSecret is initialized earlier (before Socket.io config)
-  const authStrategiesArray = ['jwt', 'local', 'anonymous'];
+  // api-key must be part of configured authStrategies, and precede jwt for Bearer agor_sk_* tokens.
+  const authStrategiesArray = ['api-key', 'jwt', 'local', 'anonymous'];
   if (sessionTokenService) {
     authStrategiesArray.push('session-token');
   }
@@ -4441,6 +4454,16 @@ async function main() {
   authentication.register('jwt', new ServiceJWTStrategy());
   authentication.register('local', new LocalStrategy());
   authentication.register('anonymous', new AnonymousStrategy());
+
+  // Register API key authentication strategy
+  const { ApiKeyStrategy } = await import('./auth/api-key-strategy.js');
+  const apiKeyStrategy = new ApiKeyStrategy();
+  authentication.register('api-key', apiKeyStrategy);
+
+  // Initialize API key strategy with dependencies (db and usersService are available from earlier)
+  const { UserApiKeysRepository } = await import('@agor/core/db');
+  const userApiKeysRepo = new UserApiKeysRepository(db);
+  apiKeyStrategy.setDependencies(userApiKeysRepo, usersService);
 
   // SECURITY: Simple in-memory rate limiter for authentication endpoints
   const authAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -6236,6 +6259,51 @@ async function main() {
     },
     {
       create: { role: ROLES.MEMBER, action: 'export .agor.yml' },
+    },
+    requireAuth
+  );
+
+  // User API Keys CRUD routes
+  const userApiKeysService = createUserApiKeysService(userApiKeysRepo);
+
+  registerAuthenticatedRoute(
+    app,
+    '/api/v1/user/api-keys',
+    {
+      async find(params: AuthenticatedParams) {
+        return userApiKeysService.find(params);
+      },
+      async create(data: { name: string }, params: AuthenticatedParams) {
+        return userApiKeysService.create(data, params);
+      },
+    },
+    {
+      find: { role: ROLES.MEMBER, action: 'list API keys' },
+      create: { role: ROLES.MEMBER, action: 'create API keys' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/api/v1/user/api-keys/:id',
+    {
+      // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+      async patch(data: { name?: string }, params: any) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('API key ID required');
+        return userApiKeysService.patch(id, data, params);
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+      async remove(_id: unknown, params: any) {
+        const keyId = params.route?.id;
+        if (!keyId) throw new BadRequest('API key ID required');
+        return userApiKeysService.remove(keyId, params);
+      },
+    },
+    {
+      patch: { role: ROLES.MEMBER, action: 'update API keys' },
+      remove: { role: ROLES.MEMBER, action: 'delete API keys' },
     },
     requireAuth
   );
