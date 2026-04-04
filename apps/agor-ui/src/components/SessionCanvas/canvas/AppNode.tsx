@@ -4,6 +4,7 @@ import { SandpackPreview, SandpackProvider } from '@codesandbox/sandpack-react';
 import { Button, Card, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
+import { withBodyReset } from './utils/sandpackDefaults';
 
 interface AppNodeData {
   objectId: string;
@@ -138,7 +139,7 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
         >
           <SandpackProvider
             template={data.template as 'react'}
-            files={data.files}
+            files={withBodyReset(data.files)}
             customSetup={data.dependencies ? { dependencies: data.dependencies } : undefined}
             options={{
               initMode: 'user-visible',

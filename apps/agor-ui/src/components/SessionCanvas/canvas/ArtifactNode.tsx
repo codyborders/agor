@@ -45,6 +45,7 @@ import { Badge, Button, Card, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import { getDaemonUrl } from '@/config/daemon';
+import { withBodyReset } from './utils/sandpackDefaults';
 
 interface ArtifactNodeData {
   objectId: string;
@@ -358,7 +359,7 @@ export const ArtifactNode = ({
           )}
           <SandpackProvider
             template={payload.template as 'react'}
-            files={payload.files}
+            files={withBodyReset(payload.files)}
             customSetup={payload.dependencies ? { dependencies: payload.dependencies } : undefined}
             options={{
               initMode: 'user-visible',

@@ -23,6 +23,7 @@ import {
   WorktreeRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import type {
   Artifact,
   ArtifactBuildStatus,
@@ -33,9 +34,24 @@ import type {
   QueryParams,
   SandpackManifest,
   SandpackTemplate,
+  UserID,
   WorktreeID,
 } from '@agor/core/types';
+import Handlebars from 'handlebars';
 import { DrizzleService } from '../adapters/drizzle.js';
+import type { UsersService } from './users.js';
+
+/**
+ * Convention: if an artifact contains a file named /agor.config.js,
+ * the backend treats it as a Handlebars template and renders it per-user
+ * at payload fetch time. Template variables:
+ *   {{ user.env.VAR_NAME }} - User's encrypted env var
+ *   {{ agor.token }}        - Scoped artifact API token (future)
+ *   {{ agor.apiUrl }}       - Daemon URL
+ *   {{ artifact.id }}       - Artifact ID
+ *   {{ artifact.boardId }}  - Board ID
+ */
+const AGOR_CONFIG_FILE = '/agor.config.js';
 
 export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
@@ -231,9 +247,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Read artifact directory and build the payload for the frontend
+   * Read artifact directory and build the payload for the frontend.
+   * If the artifact contains an /agor.config.js file, it is treated as a
+   * Handlebars template and rendered with the requesting user's context.
    */
-  async getPayload(artifactId: string): Promise<ArtifactPayload> {
+  async getPayload(artifactId: string, userId?: UserID): Promise<ArtifactPayload> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 
@@ -259,6 +277,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     // Compute hash
     const contentHash = this.computeHash(artifactDir);
 
+    // Render agor.config.js template if present
+    let missingEnvVars: string[] | undefined;
+    if (files[AGOR_CONFIG_FILE]) {
+      const result = await this.renderAgorConfig(files[AGOR_CONFIG_FILE], artifact, userId);
+      files[AGOR_CONFIG_FILE] = result.rendered;
+      if (result.missingEnvVars.length > 0) {
+        missingEnvVars = result.missingEnvVars;
+      }
+    }
+
     return {
       artifact_id: artifact.artifact_id,
       name: artifact.name,
@@ -268,6 +296,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       dependencies: manifest.dependencies,
       entry: manifest.entry,
       content_hash: contentHash,
+      ...(missingEnvVars ? { missing_env_vars: missingEnvVars } : {}),
     };
   }
 
@@ -420,6 +449,102 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   // ── Private helpers ──
+
+  /**
+   * Render an agor.config.js Handlebars template with user-specific context.
+   * Returns the rendered string and a list of user.env.* vars that are missing.
+   */
+  private async renderAgorConfig(
+    rawTemplate: string,
+    artifact: Artifact,
+    userId?: UserID
+  ): Promise<{ rendered: string; missingEnvVars: string[] }> {
+    // Extract all user.env.* references from the template AST
+    const requiredEnvVars = this.extractUserEnvPaths(rawTemplate);
+
+    // Build template context
+    const daemonUrl =
+      process.env.VITE_DAEMON_URL || `http://localhost:${process.env.PORT || '3030'}`;
+
+    // Resolve board slug for template context
+    const board = await this.boardRepo.findById(artifact.board_id);
+
+    const context: Record<string, unknown> = {
+      artifact: { id: artifact.artifact_id, boardId: artifact.board_id },
+      agor: { apiUrl: daemonUrl },
+      board: { id: artifact.board_id, slug: board?.slug ?? '' },
+    };
+
+    let missingEnvVars: string[] = requiredEnvVars; // all missing if no user
+
+    if (userId) {
+      try {
+        const usersService = this.app.service('users') as unknown as UsersService;
+        const [envVars, user] = await Promise.all([
+          usersService.getEnvironmentVariables(userId),
+          usersService.get(userId),
+        ]);
+        context.user = { id: userId, name: user.name ?? '', email: user.email, env: envVars };
+        missingEnvVars = requiredEnvVars.filter((v) => !envVars[v]);
+      } catch (error) {
+        console.error(
+          `Failed to resolve env vars for artifact ${artifact.artifact_id}, user ${userId}:`,
+          error
+        );
+        context.user = { id: userId, env: {} };
+      }
+
+      // TODO: generate scoped artifact token via SessionTokenService
+      // (context.agor as any).token = await this.generateArtifactToken(artifact, userId);
+    }
+
+    // Render template using shared core helper (missing values become "")
+    const rendered = renderTemplate(rawTemplate, context);
+    // renderTemplate returns "" on error; fall back to raw template so the user sees something
+    return { rendered: rendered || rawTemplate, missingEnvVars };
+  }
+
+  /**
+   * Parse a Handlebars template and extract all user.env.* variable names.
+   * Performs a full AST traversal to catch references in any position
+   * (mustache statements, block params, subexpressions, helpers, etc.).
+   */
+  private extractUserEnvPaths(templateString: string): string[] {
+    try {
+      const ast = Handlebars.parse(templateString);
+      const paths: string[] = [];
+
+      function collectPathExpression(node: Record<string, unknown>): void {
+        if (node.type === 'PathExpression' && typeof node.original === 'string') {
+          if (node.original.startsWith('user.env.')) {
+            paths.push(node.original.replace('user.env.', ''));
+          }
+        }
+      }
+
+      function walk(node: unknown): void {
+        if (!node || typeof node !== 'object') return;
+        const n = node as Record<string, unknown>;
+
+        // Check this node itself for PathExpression
+        collectPathExpression(n);
+
+        // Traverse all known AST child properties
+        for (const key of ['body', 'params', 'hash', 'pairs']) {
+          const child = n[key];
+          if (Array.isArray(child)) child.forEach(walk);
+        }
+        for (const key of ['path', 'program', 'inverse', 'value']) {
+          if (n[key] && typeof n[key] === 'object') walk(n[key]);
+        }
+      }
+
+      walk(ast);
+      return [...new Set(paths)];
+    } catch {
+      return [];
+    }
+  }
 
   /**
    * Resolve artifact directory with path containment check.

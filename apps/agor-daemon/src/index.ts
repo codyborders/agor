@@ -3066,10 +3066,10 @@ async function main() {
         const artifactId = _params.route?.id;
         if (!artifactId) throw new Error('Artifact ID required');
         const artifactsService = app.service('artifacts') as unknown as ArtifactsService;
-        return artifactsService.getPayload(artifactId);
+        return artifactsService.getPayload(artifactId, _params.user?.user_id);
       },
     },
-    {},
+    { find: { role: ROLES.VIEWER, action: 'get artifact payload' } },
     requireAuth
   );
 
