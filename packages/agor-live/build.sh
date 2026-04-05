@@ -158,14 +158,51 @@ pnpm build
 if [[ "$WITH_SANDPACK" == true ]]; then
   echo ""
   echo "🧩 Building self-hosted Sandpack bundler..."
-  SANDPACK_DIR="$REPO_ROOT/.sandpack-bundler"
+  # IMPORTANT: Clone OUTSIDE the monorepo. sandpack-bundler uses yarn, but yarn
+  # walks up from CWD looking for package.json and will find the monorepo root's
+  # "packageManager": "pnpm@..." field and refuse to run. Keeping it outside the
+  # repo avoids the collision entirely.
+  SANDPACK_DIR="${AGOR_SANDPACK_DIR:-$HOME/.cache/agor/sandpack-bundler}"
   if [[ ! -d "$SANDPACK_DIR" ]]; then
-    echo "  → Cloning sandpack-bundler..."
+    echo "  → Cloning sandpack-bundler to $SANDPACK_DIR..."
+    mkdir -p "$(dirname "$SANDPACK_DIR")"
     git clone --depth 1 https://github.com/codesandbox/sandpack-bundler.git "$SANDPACK_DIR"
   fi
   cd "$SANDPACK_DIR"
   echo "  → Installing dependencies..."
   yarn install --frozen-lockfile 2>/dev/null || yarn install
+  echo "  → Patching build script for relative asset paths..."
+  # sandpack-bundler's build script chains `parcel build ... && cp ...`, so we
+  # can't override via `yarn build` args (they'd land on cp). Patch the script
+  # in package.json to force `--public-url ./`, which makes Parcel emit relative
+  # asset paths that work when served from /static/sandpack/ (Parcel's default
+  # is `/`, which bakes absolute paths into index.html and breaks subpath mounts).
+  node -e "
+    const fs = require('fs');
+    const path = 'package.json';
+    const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+    if (pkg.scripts && pkg.scripts.build) {
+      const before = pkg.scripts.build;
+      let after;
+      if (/--public-url\s+\S+/.test(before)) {
+        // Replace existing flag value
+        after = before.replace(/--public-url\s+\S+/g, '--public-url ./');
+      } else {
+        // Insert flag right after 'parcel build <entry>'
+        after = before.replace(
+          /(parcel\s+build\s+\S+)/,
+          '\$1 --public-url ./'
+        );
+      }
+      if (after !== before) {
+        pkg.scripts.build = after;
+        fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+        console.log('    patched: ' + after);
+      } else {
+        console.log('    WARNING: could not find parcel build command to patch');
+      }
+    }
+  "
   echo "  → Building..."
   yarn build
   echo "  ✓ Sandpack bundler built"
