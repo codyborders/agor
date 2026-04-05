@@ -564,8 +564,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           }
         }
 
-        // If not in a zone, anchor near existing content on the board
+        // If not in a zone, compute a smart default position using board entities
         if (!position) {
+          const { resolveEntityAbsolutePositions, computeDefaultBoardPosition } = await import(
+            '@agor/core/utils/board-placement'
+          );
+
+          // Fetch all entities for THIS board
           const existingResult = await boardObjectsService.find({
             query: { board_id: data.boardId },
             ...params,
@@ -576,41 +581,38 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             }
           ).data;
 
-          // Strategy 1: centroid of absolute-positioned worktrees
-          const absolute = existing.filter(
+          // Filter to active (non-archived) worktree entities via single batch query
+          const worktreeEntities = existing.filter(
             (obj: import('@agor/core/types').BoardEntityObject) =>
-              obj.entity_type === 'worktree' && !obj.zone_id
+              obj.entity_type === 'worktree' && obj.worktree_id
           );
-          if (absolute.length > 0) {
-            const cx = absolute.reduce((s, o) => s + o.position.x, 0) / absolute.length;
-            const cy = absolute.reduce((s, o) => s + o.position.y, 0) / absolute.length;
-            position = {
-              x: cx + (Math.random() - 0.5) * 300,
-              y: cy + (Math.random() - 0.5) * 300,
-            };
+
+          let activeEntities = worktreeEntities;
+          if (worktreeEntities.length > 0) {
+            const worktreesResult = await this.app.service('worktrees').find({
+              query: { repo_id: repo.repo_id, $limit: 500 },
+              paginate: false,
+            });
+            const worktreesList = Array.isArray(worktreesResult)
+              ? worktreesResult
+              : (worktreesResult as { data: { worktree_id: string; archived: boolean }[] }).data;
+            const archivedIds = new Set(
+              worktreesList
+                .filter((wt: { archived: boolean }) => wt.archived)
+                .map((wt: { worktree_id: string }) => wt.worktree_id)
+            );
+            activeEntities = worktreeEntities.filter((e) => !archivedIds.has(e.worktree_id!));
           }
 
-          // Strategy 2: below the lowest zone
-          if (!position && board?.objects) {
-            const zones = Object.values(board.objects).filter(
-              (o: unknown) => (o as { type: string }).type === 'zone'
-            ) as import('@agor/core/types').ZoneBoardObject[];
-            if (zones.length > 0) {
-              let maxBottom = 0;
-              let anchorX = 0;
-              for (const z of zones) {
-                const bottom = z.y + z.height;
-                if (bottom > maxBottom) {
-                  maxBottom = bottom;
-                  anchorX = z.x;
-                }
-              }
-              position = {
-                x: anchorX + (Math.random() - 0.5) * 200,
-                y: maxBottom + 80 + Math.random() * 100,
-              };
-            }
-          }
+          // Extract zones from THIS board's objects
+          const zones = board?.objects
+            ? Object.entries(board.objects)
+                .filter(([, o]) => (o as { type: string }).type === 'zone')
+                .map(([id, o]) => ({ id, ...(o as import('@agor/core/types').ZoneBoardObject) }))
+            : [];
+
+          const absolutePositions = resolveEntityAbsolutePositions(activeEntities, zones);
+          position = computeDefaultBoardPosition(absolutePositions, zones);
         }
       } catch (error) {
         console.warn(
@@ -619,7 +621,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         );
       }
 
-      // Final fallback: near origin
+      // Final fallback: near origin (if smart positioning threw)
       if (!position) {
         position = { x: 100 + Math.random() * 200, y: 100 + Math.random() * 200 };
       }
