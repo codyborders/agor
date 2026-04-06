@@ -5,6 +5,7 @@
  * Artifacts are DB-backed live web applications that render on the board canvas.
  */
 
+import { NotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
@@ -178,7 +179,49 @@ Then in your app: import { apiKey, apiUrl } from '/agor.config.js';`,
     }
   );
 
-  // Tool 5: agor_artifacts_list
+  // Tool 5: agor_artifacts_get
+  server.registerTool(
+    'agor_artifacts_get',
+    {
+      description:
+        'Get a single artifact by ID, including its full file map (path → content). Use this to read artifact source code from another worktree without filesystem access. Respects visibility: public artifacts are readable by anyone; private artifacts are only readable by their creator.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        artifactId: z.string().describe('Artifact ID (full UUID or short prefix)'),
+      }),
+    },
+    async (args) => {
+      const service = ctx.app.service('artifacts') as unknown as ArtifactsService;
+      const artifactId = coerceString(args.artifactId)!;
+
+      // Fetch the artifact via the Feathers get() method (inherited from DrizzleService)
+      let artifact: Awaited<ReturnType<typeof service.get>>;
+      try {
+        artifact = await service.get(artifactId, ctx.baseServiceParams);
+      } catch (err) {
+        if (err instanceof NotFoundError) {
+          return textResult({ error: `Artifact ${artifactId} not found` });
+        }
+        throw err;
+      }
+
+      // Visibility check: private artifacts are only visible to their creator
+      if (!artifact.public) {
+        if (!ctx.userId || !artifact.created_by || artifact.created_by !== ctx.userId) {
+          return textResult({ error: `Artifact ${artifactId} not found` });
+        }
+      }
+
+      // Return metadata (without files blob) + full file map separately
+      const { files, ...metadata } = artifact;
+      return textResult({
+        artifact: metadata,
+        files: files ?? {},
+      });
+    }
+  );
+
+  // Tool 6: agor_artifacts_list
   server.registerTool(
     'agor_artifacts_list',
     {
