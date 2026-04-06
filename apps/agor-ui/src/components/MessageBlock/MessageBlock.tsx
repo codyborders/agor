@@ -20,9 +20,9 @@ import {
   PermissionStatus,
   type User,
 } from '@agor/core/types';
-import { CheckCircleOutlined, CloseCircleOutlined, RobotOutlined } from '@ant-design/icons';
+import { RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Spin, Tooltip, theme } from 'antd';
+import { Tooltip, theme } from 'antd';
 
 import type React from 'react';
 import { formatTimestampWithRelative } from '../../utils/time';
@@ -34,7 +34,12 @@ import { InputRequestBlock } from '../InputRequestBlock';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { ThinkingBlock } from '../ThinkingBlock';
-import { ToolBlock } from '../ToolBlock';
+import {
+  ALWAYS_EXPANDED_TOOLS,
+  deriveToolStatus,
+  renderToolStatusIcon,
+  ToolBlock,
+} from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 
@@ -94,9 +99,6 @@ interface MessageBlockProps {
     annotations?: Record<string, { markdown?: string; notes?: string }>
   ) => void;
 }
-
-/** Tools whose content is always shown expanded by default */
-const ALWAYS_EXPANDED_TOOLS = new Set(['Edit', 'Write', 'edit', 'write', 'edit_files']);
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
 function getToolDescription(toolUse: ToolUseBlock): string | undefined {
@@ -589,22 +591,21 @@ export const MessageBlock: React.FC<MessageBlockProps> = ({
             gap: 2,
           }}
         >
-          {toolBlocks.map(({ toolUse, toolResult }) => {
-            const isError = toolResult?.is_error;
+          {toolBlocks.map(({ toolUse, toolResult }, toolIndex) => {
             const displayName = getToolDisplayName(toolUse.name, toolUse.input);
             const isAlwaysExpanded = ALWAYS_EXPANDED_TOOLS.has(toolUse.name);
-            const status: 'success' | 'error' | 'pending' = !toolResult
-              ? 'pending'
-              : isError
-                ? 'error'
-                : 'success';
-            const icon = !toolResult ? (
-              <Spin size="small" />
-            ) : isError ? (
-              <CloseCircleOutlined style={{ fontSize: 14 }} />
-            ) : (
-              <CheckCircleOutlined style={{ fontSize: 14 }} />
-            );
+
+            // A tool can only be "pending" if it's the last in this message AND
+            // this is the latest message — otherwise the agent has moved on
+            const isLastTool = toolIndex === toolBlocks.length - 1 && isLatestMessage;
+
+            const status = deriveToolStatus({
+              hasResult: !!toolResult,
+              isError: !!toolResult?.is_error,
+              isLastTool,
+              isTaskRunning,
+            });
+            const icon = renderToolStatusIcon(status);
 
             return (
               <ToolBlock
