@@ -926,16 +926,31 @@ async function main() {
         | undefined;
 
       // Resolve gateway-level env vars (for sessions created via gateway channels)
-      let gatewayEnv: Record<string, string> | undefined;
+      let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
       const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
         ?.gateway_source as { channel_id?: string } | undefined;
       if (gatewaySource?.channel_id) {
         try {
-          const { GatewayChannelRepository } = await import('@agor/core/db');
+          const { GatewayChannelRepository, decryptApiKey, isEncrypted } = await import(
+            '@agor/core/db'
+          );
           const channelRepo = new GatewayChannelRepository(db);
           const channel = await channelRepo.findById(gatewaySource.channel_id);
           if (channel?.agentic_config?.envVars) {
-            gatewayEnv = channel.agentic_config.envVars as Record<string, string>;
+            // Decrypt env var values (stored encrypted at rest). Be tolerant of
+            // malformed/plaintext legacy entries so one bad value doesn't drop
+            // all gateway env vars for execution.
+            gatewayEnv = channel.agentic_config.envVars.map((v) => ({
+              ...v,
+              value: (() => {
+                if (!v.value || !isEncrypted(v.value)) return v.value;
+                try {
+                  return decryptApiKey(v.value);
+                } catch {
+                  return v.value;
+                }
+              })(),
+            }));
           }
         } catch {
           // Non-fatal — gateway env vars are optional
@@ -3505,8 +3520,107 @@ async function main() {
   app.service('gateway-channels').hooks({
     before: {
       all: [requireAuth],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create gateway channels')],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update gateway channels')],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create gateway channels'),
+        // Encrypt env var values at rest (same pattern as user env vars / API keys)
+        async (context: HookContext) => {
+          const data = context.data as Record<string, unknown> | undefined;
+          const ac = data?.agentic_config as Record<string, unknown> | undefined;
+          if (!ac || !Array.isArray(ac.envVars)) return context;
+          const { encryptApiKey } = await import('@agor/core/db');
+          ac.envVars = (ac.envVars as { key: string; value: string; forceOverride: boolean }[]).map(
+            (v) => ({
+              ...v,
+              value: v.value ? encryptApiKey(v.value) : v.value,
+            })
+          );
+          return context;
+        },
+      ],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update gateway channels'),
+        // Resolve redacted env var sentinel values ('••••••••') back to real
+        // values from the database. Uses the repository directly to bypass
+        // the after-hook redaction that the service layer applies.
+        //
+        // Semantics:
+        // - envVars omitted (undefined) → preserve all existing env vars
+        // - envVars = [] (empty array) → explicitly delete all env vars
+        // - envVars = [...] with sentinels → substitute real values per key
+        async (context: HookContext) => {
+          const data = context.data as Record<string, unknown> | undefined;
+          if (!data || !context.id) return context;
+
+          let ac = data.agentic_config as Record<string, unknown> | undefined;
+          const hadAgenticConfigInPatch = ac !== undefined;
+          const ensureAc = (): Record<string, unknown> => {
+            if (!ac) {
+              ac = {};
+              data.agentic_config = ac;
+            }
+            return ac;
+          };
+
+          const SENTINEL = '••••••••';
+          const incomingVars = ac?.envVars as
+            | { key: string; value: string; forceOverride: boolean }[]
+            | undefined;
+
+          // undefined → preserve existing env vars
+          if (incomingVars === undefined) {
+            try {
+              const { GatewayChannelRepository } = await import('@agor/core/db');
+              const channelRepo = new GatewayChannelRepository(db);
+              const existing = await channelRepo.findById(String(context.id));
+              // For patches that omit agentic_config entirely (e.g. enabled toggle),
+              // copy existing agentic_config so migration still occurs on save.
+              if (!hadAgenticConfigInPatch && existing?.agentic_config) {
+                ac = { ...(existing.agentic_config as unknown as Record<string, unknown>) };
+                data.agentic_config = ac;
+              }
+              if (existing?.agentic_config?.envVars) {
+                ensureAc().envVars = existing.agentic_config.envVars;
+              }
+            } catch {
+              // Non-fatal
+            }
+            return context;
+          }
+
+          // [] → explicit delete all (no substitution needed)
+          if (incomingVars.length === 0) return context;
+
+          // Has entries with potential sentinels — substitute from DB
+          const hasSentinels = incomingVars.some((v) => v.value === SENTINEL);
+          if (!hasSentinels) {
+            ensureAc().envVars = incomingVars;
+            return context;
+          }
+
+          try {
+            const { GatewayChannelRepository } = await import('@agor/core/db');
+            const channelRepo = new GatewayChannelRepository(db);
+            const existing = await channelRepo.findById(String(context.id));
+            const existingVars = existing?.agentic_config?.envVars ?? [];
+            const existingByKey = new Map(existingVars.map((v) => [v.key, v.value]));
+
+            // Substitute sentinels with existing values. Encryption-at-rest is
+            // handled in GatewayChannelRepository.
+            ensureAc().envVars = incomingVars.map((v) => {
+              if (v.value === SENTINEL && existingByKey.has(v.key)) {
+                return { ...v, value: existingByKey.get(v.key)! };
+              }
+              return v;
+            });
+          } catch (error) {
+            throw new BadRequest(
+              `Failed to resolve redacted gateway env vars: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+
+          return context;
+        },
+      ],
       remove: [requireMinimumRole(ROLES.MEMBER, 'delete gateway channels')],
     },
     after: {
@@ -3528,6 +3642,15 @@ async function main() {
                 }
               }
               channel.config = config;
+            }
+            // Redact env var values in agentic_config (keep keys and forceOverride visible)
+            if (channel?.agentic_config && typeof channel.agentic_config === 'object') {
+              const ac = channel.agentic_config as Record<string, unknown>;
+              if (Array.isArray(ac.envVars)) {
+                ac.envVars = (
+                  ac.envVars as { key: string; value: string; forceOverride: boolean }[]
+                ).map((v) => ({ key: v.key, value: '••••••••', forceOverride: v.forceOverride }));
+              }
             }
           };
           if (Array.isArray(context.result?.data)) {
