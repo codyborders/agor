@@ -1,3 +1,4 @@
+import { isWorktreeRbacEnabled } from '@agor/core/config';
 import { WorktreeRepository } from '@agor/core/db';
 import type {
   AgenticToolName,
@@ -161,6 +162,32 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .string()
           .optional()
           .describe('Pull request URL to associate with the worktree.'),
+        // RBAC fields (optional, sensible defaults, safe to ignore for single-user setups)
+        othersCan: z
+          .enum(['none', 'view', 'prompt', 'all'])
+          .optional()
+          .describe(
+            'App-layer permission for non-owner users. ' +
+              '"none" = no access, "view" = read-only, "prompt" = can send prompts to sessions, "all" = full access. ' +
+              'Default: "view". Always effective regardless of Unix isolation mode. Single-user setups can ignore this.'
+          ),
+        othersFsAccess: z
+          .enum(['none', 'read', 'write'])
+          .optional()
+          .describe(
+            'OS-level filesystem permission for non-owner users. ' +
+              '"none" = no filesystem access, "read" = read-only, "write" = read-write. ' +
+              'Default: "read". Only effective when Unix isolation (AGOR_UNIX_MODE) is configured. ' +
+              'Has no effect in simple mode. Single-user setups can ignore this.'
+          ),
+        ownerIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Additional user IDs to add as owners of this worktree. ' +
+              'The creating user is always added as owner automatically. ' +
+              'Owners have full access regardless of othersCan/othersFsAccess settings.'
+          ),
       }),
     },
     async (args) => {
@@ -234,6 +261,9 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
       // Positioning is handled automatically by the repos service —
       // agents don't need to think about x/y coordinates.
 
+      const othersCan = args.othersCan as 'none' | 'view' | 'prompt' | 'all' | undefined;
+      const othersFsAccess = args.othersFsAccess as 'none' | 'read' | 'write' | undefined;
+
       const worktree = await reposService.createWorktree(
         repoId,
         {
@@ -247,9 +277,35 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
           ...(boardId ? { boardId } : {}),
           ...(zoneId ? { zoneId } : {}),
+          ...(othersCan ? { others_can: othersCan } : {}),
+          ...(othersFsAccess ? { others_fs_access: othersFsAccess } : {}),
         },
         ctx.baseServiceParams
       );
+
+      // Add additional owners (creator is already added by reposService.createWorktree)
+      const ownerWarnings: string[] = [];
+      if (args.ownerIds && args.ownerIds.length > 0) {
+        if (!isWorktreeRbacEnabled()) {
+          ownerWarnings.push(
+            'ownerIds ignored: worktree RBAC is not enabled. Enable worktree_rbac in config to manage owners.'
+          );
+        } else {
+          const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
+          for (const ownerId of args.ownerIds) {
+            try {
+              await worktreeOwnersService.create(
+                { user_id: ownerId },
+                { ...ctx.baseServiceParams, route: { id: worktree.worktree_id } }
+              );
+            } catch (error) {
+              ownerWarnings.push(
+                `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          }
+        }
+      }
 
       // Build response with appropriate notes
       const response: Record<string, unknown> = { ...worktree };
@@ -265,6 +321,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           'Use agor_worktrees_set_zone to pin this worktree to a specific zone and optionally trigger zone prompt templates.';
       }
 
+      if (ownerWarnings.length > 0) {
+        response.ownerWarnings = ownerWarnings;
+      }
+
       return textResult(response);
     }
   );
@@ -274,7 +334,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
     'agor_worktrees_update',
     {
       description:
-        'Update metadata for an existing worktree (issue/PR URLs, notes, board placement, custom context)',
+        'Update metadata for an existing worktree (issue/PR URLs, notes, board placement, custom context, RBAC permissions, owners)',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         worktreeId: z
@@ -320,6 +380,39 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
           .optional()
           .describe(
             'Default MCP server IDs for new sessions in this worktree. Sessions inherit these unless they explicitly specify their own. Pass null to clear.'
+          ),
+        // RBAC fields (optional, safe to ignore for single-user setups)
+        othersCan: z
+          .enum(['none', 'view', 'prompt', 'all'])
+          .optional()
+          .describe(
+            'App-layer permission for non-owner users. ' +
+              '"none" = no access, "view" = read-only, "prompt" = can send prompts to sessions, "all" = full access. ' +
+              'Always effective regardless of Unix isolation mode. Single-user setups can ignore this.'
+          ),
+        othersFsAccess: z
+          .enum(['none', 'read', 'write'])
+          .optional()
+          .describe(
+            'OS-level filesystem permission for non-owner users. ' +
+              '"none" = no filesystem access, "read" = read-only, "write" = read-write. ' +
+              'Only effective when Unix isolation (AGOR_UNIX_MODE) is configured. ' +
+              'Has no effect in simple mode. Single-user setups can ignore this.'
+          ),
+        addOwnerIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'User IDs to ADD as owners of this worktree. ' +
+              'Owners have full access regardless of othersCan/othersFsAccess settings. ' +
+              'Idempotent — adding an existing owner is a no-op.'
+          ),
+        removeOwnerIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'User IDs to REMOVE as owners of this worktree. ' +
+              'Idempotent — removing a non-owner is a no-op.'
           ),
       }),
     },
@@ -371,17 +464,83 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
         fieldsProvided++;
         updates.mcp_server_ids = args.mcpServerIds === null ? [] : args.mcpServerIds;
       }
+      if (args.othersCan !== undefined) {
+        fieldsProvided++;
+        updates.others_can = args.othersCan;
+      }
+      if (args.othersFsAccess !== undefined) {
+        fieldsProvided++;
+        updates.others_fs_access = args.othersFsAccess;
+      }
+      const hasOwnerChanges =
+        (args.addOwnerIds && args.addOwnerIds.length > 0) ||
+        (args.removeOwnerIds && args.removeOwnerIds.length > 0);
+      if (hasOwnerChanges) fieldsProvided++;
 
       if (fieldsProvided === 0) throw new Error('provide at least one field to update');
 
-      const worktree = await ctx.app
-        .service('worktrees')
-        .patch(
-          resolvedWorktreeId as string,
-          updates as unknown as Partial<Worktree>,
-          ctx.baseServiceParams
-        );
-      return textResult({ worktree, note: 'Worktree metadata updated successfully.' });
+      // Patch worktree fields (skip if only owner changes)
+      let worktree: Worktree;
+      if (Object.keys(updates).length > 0) {
+        worktree = (await ctx.app
+          .service('worktrees')
+          .patch(
+            resolvedWorktreeId as string,
+            updates as unknown as Partial<Worktree>,
+            ctx.baseServiceParams
+          )) as Worktree;
+      } else {
+        worktree = (await ctx.app
+          .service('worktrees')
+          .get(resolvedWorktreeId as string, ctx.baseServiceParams)) as Worktree;
+      }
+
+      // Handle owner additions/removals via the owners service (includes unix sync hooks)
+      const ownerErrors: string[] = [];
+      if (hasOwnerChanges) {
+        if (!isWorktreeRbacEnabled()) {
+          ownerErrors.push(
+            'Owner changes ignored: worktree RBAC is not enabled. Enable worktree_rbac in config to manage owners.'
+          );
+        } else {
+          const worktreeOwnersService = ctx.app.service('worktrees/:id/owners');
+          // Use full UUID from resolved worktree (not the potentially-short input ID)
+          const routeParams = {
+            ...ctx.baseServiceParams,
+            route: { id: worktree.worktree_id },
+          };
+
+          if (args.addOwnerIds) {
+            for (const ownerId of args.addOwnerIds) {
+              try {
+                await worktreeOwnersService.create({ user_id: ownerId }, routeParams);
+              } catch (error) {
+                ownerErrors.push(
+                  `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
+                );
+              }
+            }
+          }
+
+          if (args.removeOwnerIds) {
+            for (const ownerId of args.removeOwnerIds) {
+              try {
+                await worktreeOwnersService.remove(ownerId, routeParams);
+              } catch (error) {
+                ownerErrors.push(
+                  `Failed to remove owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
+                );
+              }
+            }
+          }
+        }
+      }
+
+      return textResult({
+        worktree,
+        note: 'Worktree metadata updated successfully.',
+        ...(ownerErrors.length > 0 ? { ownerWarnings: ownerErrors } : {}),
+      });
     }
   );
 
