@@ -1135,4 +1135,51 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       });
     }
   );
+
+  // Tool 12: agor_sessions_stop
+  server.registerTool(
+    'agor_sessions_stop',
+    {
+      description:
+        'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, awaiting_permission, stopping).',
+      annotations: { destructiveHint: true },
+      inputSchema: z.object({
+        sessionId: z.string().describe('Session ID to stop (UUIDv7 or short ID)'),
+        reason: z
+          .string()
+          .optional()
+          .describe(
+            'Audit log reason for the stop (e.g. "timeout", "user requested", "safety gate")'
+          ),
+      }),
+    },
+    async (args) => {
+      const sessionId = await resolveSessionId(ctx, args.sessionId);
+
+      const result = await ctx.app
+        .service('/sessions/:id/stop')
+        .create(
+          { ...(args.reason ? { reason: args.reason } : {}) },
+          { ...ctx.baseServiceParams, route: { id: sessionId } }
+        );
+
+      const stopResult = result as { success: boolean; status?: string; reason?: string };
+
+      if (!stopResult.success) {
+        return textResult({
+          success: false,
+          sessionId,
+          error: stopResult.reason || 'Failed to stop session',
+        });
+      }
+
+      return textResult({
+        success: true,
+        sessionId,
+        status: stopResult.status,
+        ...(args.reason ? { reason: args.reason } : {}),
+        note: stopResult.reason || 'Session stopped successfully.',
+      });
+    }
+  );
 }

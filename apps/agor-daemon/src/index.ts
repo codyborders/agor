@@ -5780,9 +5780,13 @@ async function main() {
     app,
     '/sessions/:id/stop',
     {
-      async create(_data: unknown, params: RouteParams) {
+      async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
+        const stopReason =
+          data && typeof data === 'object' && 'reason' in data && typeof data.reason === 'string'
+            ? data.reason
+            : undefined;
 
         const session = await sessionsService.get(id, params);
 
@@ -5818,7 +5822,7 @@ async function main() {
         if (targetTasksArray.length === 0) {
           // No active tasks — just reset session to IDLE (it's stuck)
           console.warn(
-            `⚠️  [Stop] No active tasks for session ${id.substring(0, 8)}, resetting to IDLE`
+            `⚠️  [Stop] No active tasks for session ${id.substring(0, 8)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
           );
           await app.service('sessions').patch(
             id,
@@ -5828,7 +5832,11 @@ async function main() {
             },
             params
           );
-          return { success: true, reason: 'No active tasks found, session reset to idle' };
+          return {
+            success: true,
+            status: SessionStatus.IDLE,
+            reason: 'No active tasks found, session reset to idle',
+          };
         }
 
         // Pick the most recent task
@@ -5840,7 +5848,7 @@ async function main() {
         const latestTask = targetTasksArray[0];
 
         console.log(
-          `🛑 [Stop] Stopping task ${latestTask.task_id.substring(0, 8)} for session ${id.substring(0, 8)}`
+          `🛑 [Stop] Stopping task ${latestTask.task_id.substring(0, 8)} for session ${id.substring(0, 8)}${stopReason ? ` (reason: ${stopReason})` : ''}`
         );
 
         // Kill the executor process (SIGTERM → 3s → SIGKILL)
@@ -5877,7 +5885,7 @@ async function main() {
           console.error(`❌ [Stop] Failed to patch session to IDLE:`, error);
         }
 
-        return { success: true };
+        return { success: true, status: SessionStatus.IDLE };
       },
     },
     {
