@@ -21,21 +21,70 @@ import {
 import type { PiPaths, PiRuntimeStatus } from './types.js';
 
 export class PiEnvironmentManager {
-  private paths: PiPaths | null = null;
-  private statusCache: PiRuntimeStatus | null = null;
-  private cacheInvalidated = false;
+  private pathsByScope = new Map<string, PiPaths>();
+  private statusByScope = new Map<string, PiRuntimeStatus>();
+
+  private getScopeKey(worktreePath?: string): string {
+    if (!worktreePath) {
+      return '__global__';
+    }
+
+    return path.resolve(worktreePath);
+  }
+
+  private getEffectiveCwd(worktreePath?: string): string {
+    return path.resolve(worktreePath ?? process.cwd());
+  }
+
+  private expandConfiguredPath(configuredPath: string, cwd: string): string {
+    if (configuredPath.startsWith('~/')) {
+      return path.join(os.homedir(), configuredPath.slice(2));
+    }
+
+    if (configuredPath === '~') {
+      return os.homedir();
+    }
+
+    if (path.isAbsolute(configuredPath)) {
+      return configuredPath;
+    }
+
+    return path.resolve(cwd, configuredPath);
+  }
+
+  private getDefaultSessionDir(cwd: string, globalConfigPath: string): string {
+    const safePath = `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+    return path.join(globalConfigPath, 'sessions', safePath);
+  }
+
+  async resolveSessionDir(worktreePath?: string): Promise<string> {
+    const cwd = this.getEffectiveCwd(worktreePath);
+    const globalConfigPath = path.join(os.homedir(), '.pi', 'agent');
+    const settingsManager = SettingsManager.create(cwd, globalConfigPath);
+    const configuredSessionDir = settingsManager.getSessionDir();
+
+    if (configuredSessionDir && configuredSessionDir.trim() !== '') {
+      return this.expandConfiguredPath(configuredSessionDir, cwd);
+    }
+
+    return this.getDefaultSessionDir(cwd, globalConfigPath);
+  }
 
   /**
    * Get or compute Pi paths for the given worktree.
    */
   async getPaths(worktreePath?: string): Promise<PiPaths> {
-    if (this.paths) {
-      return this.paths;
+    const scopeKey = this.getScopeKey(worktreePath);
+    const cachedPaths = this.pathsByScope.get(scopeKey);
+    if (cachedPaths) {
+      return cachedPaths;
     }
 
     const homeDir = os.homedir();
     const globalConfigPath = path.join(homeDir, '.pi', 'agent');
-    const globalSessionsPath = path.join(globalConfigPath, 'sessions');
+    const cwd = this.getEffectiveCwd(worktreePath);
+    const settingsManager = SettingsManager.create(cwd, globalConfigPath);
+    const globalSessionsPath = await this.resolveSessionDir(worktreePath);
 
     const paths: PiPaths = {
       globalConfigPath,
@@ -43,20 +92,22 @@ export class PiEnvironmentManager {
     };
 
     if (worktreePath) {
-      const projectConfigPath = path.join(worktreePath, '.pi');
-      const projectSessionsPath = path.join(projectConfigPath, 'sessions');
+      const projectConfigPath = path.join(cwd, '.pi');
+      const projectSessionDir = settingsManager.getProjectSettings().sessionDir;
 
       // Check if project-level Pi exists
       try {
         await fs.access(projectConfigPath);
         paths.projectConfigPath = projectConfigPath;
-        paths.projectSessionsPath = projectSessionsPath;
+        if (projectSessionDir && projectSessionDir.trim() !== '') {
+          paths.projectSessionsPath = this.expandConfiguredPath(projectSessionDir, cwd);
+        }
       } catch {
         // Project-level Pi doesn't exist yet
       }
     }
 
-    this.paths = paths;
+    this.pathsByScope.set(scopeKey, paths);
     return paths;
   }
 
@@ -64,8 +115,10 @@ export class PiEnvironmentManager {
    * Get Pi runtime status.
    */
   async getStatus(worktreePath?: string): Promise<PiRuntimeStatus> {
-    if (this.statusCache && !this.cacheInvalidated) {
-      return this.statusCache;
+    const scopeKey = this.getScopeKey(worktreePath);
+    const cachedStatus = this.statusByScope.get(scopeKey);
+    if (cachedStatus) {
+      return cachedStatus;
     }
 
     const paths = await this.getPaths(worktreePath);
@@ -80,7 +133,7 @@ export class PiEnvironmentManager {
       themes: await this.getThemes(paths),
     };
 
-    this.statusCache = status;
+    this.statusByScope.set(scopeKey, status);
     return status;
   }
 
@@ -186,9 +239,8 @@ export class PiEnvironmentManager {
    * Invalidate cached values.
    */
   invalidateCache(): void {
-    this.paths = null;
-    this.statusCache = null;
-    this.cacheInvalidated = true;
+    this.pathsByScope.clear();
+    this.statusByScope.clear();
   }
 
   /**

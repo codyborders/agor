@@ -49,8 +49,12 @@ export class PiNativeSessionsService {
   /**
    * Get a specific native session tree.
    */
-  async get(id: string, _params?: Params): Promise<unknown> {
-    return this.sessionService.getSessionTree(id);
+  async get(id: string, params?: Params): Promise<unknown> {
+    const worktreePath = await resolveOptionalWorktreePath(
+      this.db,
+      params?.query?.worktree_id as string | undefined
+    );
+    return this.sessionService.getSessionTree(id, worktreePath);
   }
 
   /**

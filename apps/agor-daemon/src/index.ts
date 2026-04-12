@@ -68,6 +68,7 @@ import {
   LocalStrategy,
   NotAuthenticated,
   rest,
+  type Service,
   socketio,
 } from '@agor/core/feathers';
 import {
@@ -458,6 +459,7 @@ import { createMCPServersService } from './services/mcp-servers';
 import { createMessagesService } from './services/messages';
 import { createPiAuthService } from './services/pi-auth';
 import { createPiFilesService } from './services/pi-files';
+import { createPiMcpToolsService } from './services/pi-mcp-tools';
 import { createPiNativeSessionsService } from './services/pi-native-sessions';
 import { createPiPackagesService } from './services/pi-packages';
 import { createPiRuntimeService } from './services/pi-runtime';
@@ -624,6 +626,21 @@ async function main() {
 
   // Helper: Return empty array for auth in anonymous mode (read-only services don't need auth)
   const getReadAuthHooks = () => (allowAnonymous ? [] : [requireAuth]);
+
+  const resolvePiMcpToolSession = async (context: HookContext) => {
+    // Skip for internal calls.
+    if (!context.params.provider) {
+      return context;
+    }
+
+    const sessionId = (context.data as { session_id?: string } | undefined)?.session_id;
+    if (!sessionId) {
+      throw new BadRequest('Pi MCP tool execution requires session_id');
+    }
+
+    context.params.sessionId = sessionId;
+    return context;
+  };
 
   // typedValidateQuery is now imported from @agor/core/lib/feathers-validation
 
@@ -1084,7 +1101,13 @@ async function main() {
           sessionId,
           taskId,
           prompt: data.prompt,
-          tool: session.agentic_tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot',
+          tool: session.agentic_tool as
+            | 'claude-code'
+            | 'gemini'
+            | 'codex'
+            | 'opencode'
+            | 'copilot'
+            | 'pi',
           permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
           cwd,
           messageSource: data.messageSource,
@@ -2839,6 +2862,11 @@ async function main() {
   app.use('/pi-packages', createPiPackagesService(db));
   app.use('/pi-native-sessions', createPiNativeSessionsService(db));
   app.use('/pi-files', createPiFilesService(db));
+  // Feathers custom service registration with method whitelist is valid at runtime,
+  // but the express overloads do not infer this service shape cleanly here.
+  app.use('/pi-mcp-tools', createPiMcpToolsService(db) as unknown as Service, {
+    methods: ['create'],
+  });
 
   // Register custom method for API key resolution (used by executors)
   app.use('/config/resolve-api-key', {
@@ -3498,6 +3526,53 @@ async function main() {
     },
     after: {
       find: [injectPerUserOAuthTokens],
+    },
+  });
+
+  app.service('pi-runtime').hooks({
+    before: {
+      all: [requireMinimumRole(ROLES.ADMIN, 'access Pi runtime')],
+    },
+  });
+
+  app.service('pi-auth').hooks({
+    before: {
+      all: [requireMinimumRole(ROLES.ADMIN, 'manage Pi authentication')],
+    },
+  });
+
+  app.service('pi-packages').hooks({
+    before: {
+      all: [requireMinimumRole(ROLES.ADMIN, 'manage Pi packages')],
+    },
+  });
+
+  app.service('pi-native-sessions').hooks({
+    before: {
+      all: [requireMinimumRole(ROLES.ADMIN, 'access Pi native sessions')],
+    },
+  });
+
+  app.service('pi-files').hooks({
+    before: {
+      all: [requireMinimumRole(ROLES.ADMIN, 'manage Pi files')],
+    },
+  });
+
+  app.service('pi-mcp-tools').hooks({
+    before: {
+      all: [requireAuth],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'execute Pi MCP tools'),
+        ...(worktreeRbacEnabled
+          ? [
+              resolvePiMcpToolSession,
+              loadSession(sessionsService),
+              loadWorktreeFromSession(worktreeRepository),
+              ensureCanPromptInSession(superadminOpts),
+            ]
+          : []),
+      ],
     },
   });
 

@@ -12,6 +12,7 @@ import { generateId } from '@agor/core/db';
 import { getGitState } from '@agor/core/git';
 import type {
   ContentBlock,
+  MCPServer,
   Message,
   MessageID,
   MessageSource,
@@ -22,7 +23,7 @@ import type {
   ToolUse,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import { getPiEnvironmentManager, getPiMcpBridgeRuntime } from '@agor/pi-runtime';
+import { getPiEnvironmentManager } from '@agor/pi-runtime';
 import type { AssistantMessage, TextContent, ThinkingContent, ToolCall } from '@mariozechner/pi-ai';
 import {
   type AgentSessionEvent,
@@ -35,8 +36,10 @@ import {
 } from '@mariozechner/pi-coding-agent';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { enrichContentBlocks } from '../../sdk-handlers/base/diff-enrichment.js';
+import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks } from './base-executor.js';
+import { buildPiMcpTools } from './pi-mcp-tools.js';
 
 type PiThinkingLevel = 'low' | 'medium' | 'high';
 
@@ -50,14 +53,6 @@ interface PiTurnState {
   assistantMessageId: MessageID | null;
   hasStreamedText: boolean;
   hasStreamedThinking: boolean;
-}
-
-function getDaemonUrl(client: AgorClient): string {
-  const manager = client.io?.io as unknown as { uri?: string } | undefined;
-  if (manager?.uri) {
-    return manager.uri;
-  }
-  return 'http://localhost:3030';
 }
 
 async function loadExecutionContext(
@@ -154,16 +149,18 @@ async function resolvePiModel(
 
 async function buildPiSessionManager(
   session: Session,
-  worktreePath: string
+  worktreePath: string,
+  settingsManager: SettingsManager
 ): Promise<SessionManager> {
+  const sessionDir = settingsManager.getSessionDir();
   const nativeBinding = session.native_binding?.pi;
   if (!nativeBinding?.session_file_path) {
-    return SessionManager.create(worktreePath);
+    return SessionManager.create(worktreePath, sessionDir);
   }
 
   const sessionManager = SessionManager.open(
     nativeBinding.session_file_path,
-    undefined,
+    sessionDir,
     worktreePath
   );
   if (!nativeBinding.branch_id) {
@@ -337,7 +334,6 @@ export async function executePiTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, abortController, messageSource } = params;
   const envManager = getPiEnvironmentManager();
-  const bridgeRuntime = getPiMcpBridgeRuntime();
   const { session, worktreePath, repos } = await loadExecutionContext(client, sessionId);
   const callbacks = createStreamingCallbacks(client, 'pi', sessionId);
   const currentTaskStartedAt = Date.now();
@@ -388,28 +384,25 @@ export async function executePiTask(params: {
     const authStorage = AuthStorage.create(path.join(agentDir, 'auth.json'));
     const modelRegistry = ModelRegistry.create(authStorage, path.join(agentDir, 'models.json'));
     const settingsManager = buildPiSettingsManager(worktreePath, agentDir, session);
-    const sessionManager = await buildPiSessionManager(session, worktreePath);
+    const sessionManager = await buildPiSessionManager(session, worktreePath, settingsManager);
     const configuredModel = await resolvePiModel(session, modelRegistry);
     const thinkingLevel = mapReasoningEffortToThinkingLevel(
       session.tool_options?.pi?.reasoning_effort
     );
-
-    const attachedServers = await repos.sessionMCP.listServers(sessionId, true);
-    if (attachedServers.length > 0 && session.mcp_token) {
-      await bridgeRuntime.generateManifest(sessionId, {
-        serverUrl: getDaemonUrl(client),
-        sessionToken: session.mcp_token,
-        servers: attachedServers.map((server) => ({
-          id: server.mcp_server_id,
-          name: server.display_name || server.name,
-          command: server.command || server.url || server.name,
-          args: server.args,
-          env: server.env,
-        })),
-        worktreePath,
-        userId: session.created_by,
-      });
-    }
+    const builtInTools = createCodingTools(worktreePath);
+    const scopedMcpServers = (
+      await getMcpServersForSession(sessionId, {
+        sessionMCPRepo: repos.sessionMCP,
+        mcpServerRepo: repos.mcpServers,
+        forUserId: session.created_by,
+      })
+    ).map(({ server }) => server) as MCPServer[];
+    const customTools = buildPiMcpTools({
+      client,
+      sessionId,
+      servers: scopedMcpServers,
+      builtInToolNames: new Set(builtInTools.map((tool) => tool.name)),
+    });
 
     const { session: piSession } = await createAgentSession({
       cwd: worktreePath,
@@ -418,7 +411,8 @@ export async function executePiTask(params: {
       modelRegistry,
       model: configuredModel,
       thinkingLevel,
-      tools: createCodingTools(worktreePath),
+      tools: builtInTools,
+      customTools,
       sessionManager,
       settingsManager,
     });

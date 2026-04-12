@@ -45,6 +45,12 @@ export interface UpdatePackageOptions {
 export class PiPackageService {
   private envManager = getPiEnvironmentManager();
 
+  private requireWorktreePathForProjectScope(scope: PackageScope, worktreePath?: string): void {
+    if (scope === 'project' && !worktreePath) {
+      throw new Error('Project-scoped Pi package operations require a worktree path');
+    }
+  }
+
   private async createPackageManager(worktreePath?: string): Promise<DefaultPackageManager> {
     const paths = await this.envManager.getPaths(worktreePath);
     const effectiveWorktreePath = worktreePath ?? process.cwd();
@@ -94,6 +100,10 @@ export class PiPackageService {
     worktreePath?: string;
     kind?: PackageKind;
   }): Promise<PiInstalledPackage[]> {
+    if (options.scope === 'project' && !options.worktreePath) {
+      throw new Error('Project-scoped Pi package queries require a worktree path');
+    }
+
     const packageManager = await this.createPackageManager(options.worktreePath);
     const configuredPackages = packageManager.listConfiguredPackages();
 
@@ -121,6 +131,7 @@ export class PiPackageService {
    * Install a package.
    */
   async installPackage(options: InstallPackageOptions): Promise<PiInstalledPackage> {
+    this.requireWorktreePathForProjectScope(options.scope, options.worktreePath);
     const packageManager = await this.createPackageManager(options.worktreePath);
     const installOptions = { local: options.scope === 'project' };
 
@@ -137,6 +148,7 @@ export class PiPackageService {
    * Update an installed package.
    */
   async updatePackage(options: UpdatePackageOptions): Promise<PiInstalledPackage> {
+    this.requireWorktreePathForProjectScope(options.scope, options.worktreePath);
     const packageManager = await this.createPackageManager(options.worktreePath);
     await packageManager.update(options.packageId);
     return this.toInstalledPackage(options.packageId, options.scope, options.packageId);
@@ -150,6 +162,7 @@ export class PiPackageService {
     scope: PackageScope,
     worktreePath?: string
   ): Promise<void> {
+    this.requireWorktreePathForProjectScope(scope, worktreePath);
     const packageManager = await this.createPackageManager(worktreePath);
     packageManager.addSourceToSettings(packageId, { local: scope === 'project' });
   }
@@ -162,6 +175,7 @@ export class PiPackageService {
     scope: PackageScope,
     worktreePath?: string
   ): Promise<void> {
+    this.requireWorktreePathForProjectScope(scope, worktreePath);
     const packageManager = await this.createPackageManager(worktreePath);
     packageManager.removeSourceFromSettings(packageId, { local: scope === 'project' });
   }
@@ -174,6 +188,7 @@ export class PiPackageService {
     scope: PackageScope,
     worktreePath?: string
   ): Promise<void> {
+    this.requireWorktreePathForProjectScope(scope, worktreePath);
     const packageManager = await this.createPackageManager(worktreePath);
     await packageManager.removeAndPersist(packageId, { local: scope === 'project' });
   }

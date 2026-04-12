@@ -9,7 +9,6 @@
  * - PiCatalogService: Models, commands, themes catalog
  * - PiPackageService: Package management
  * - PiAuthService: Authentication provider management
- * - PiMcpBridgeRuntime: Agor MCP bridging into Pi sessions
  */
 
 export type {
@@ -24,8 +23,6 @@ export { getPiCatalogService, PiCatalogService } from './catalog-service.js';
 
 // Environment Manager
 export { getPiEnvironmentManager, PiEnvironmentManager } from './environment-manager.js';
-// MCP Bridge Runtime
-export { getPiMcpBridgeRuntime, PiMcpBridgeRuntime } from './mcp-bridge-runtime.js';
 export type {
   InstallPackageOptions,
   PackageKind,
@@ -42,7 +39,6 @@ export type {
   CompactionEvent,
   CreateSessionOptions,
   ForkSessionOptions,
-  McpBridgeConfig,
   PiCompletionResult,
   PiPaths,
   PiStreamingCallbacks,

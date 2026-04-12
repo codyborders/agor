@@ -18,6 +18,7 @@ import type {
   PiAuthProviderStatus,
   PiFileDocument,
   PiInstalledPackage,
+  PiMcpToolCallResult,
   PiNativeSessionSummary,
   PiRuntimeStatus,
   Repo,
@@ -66,6 +67,7 @@ export interface ServiceTypes {
   'pi-packages': PiInstalledPackage;
   'pi-native-sessions': PiNativeSessionSummary;
   'pi-files': PiFileDocument;
+  'pi-mcp-tools': PiMcpToolCallResult;
 }
 
 /**
@@ -337,6 +339,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'pi-packages'): AgorService<PiInstalledPackage>;
   service(path: 'pi-native-sessions'): AgorService<PiNativeSessionSummary>;
   service(path: 'pi-files'): AgorService<PiFileDocument>;
+  service(path: 'pi-mcp-tools'): AgorService<PiMcpToolCallResult>;
 
   // Generic fallback for custom routes and dynamic paths
   service<K extends keyof ServiceTypes>(path: K): AgorService<ServiceTypes[K]>;

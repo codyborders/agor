@@ -24,7 +24,7 @@ export class PiFilesService {
   private async resolveDocumentPath(id: FileId, worktreePath?: string): Promise<string> {
     if (id === 'project-settings') {
       if (!worktreePath) {
-        return this.envManager.resolveConfigPath('settings');
+        throw new Error('project-settings requires worktree_id');
       }
       return path.join(worktreePath, '.pi', 'settings.json');
     }
@@ -112,7 +112,10 @@ export class PiFilesService {
     if (data.mode === 'structured') {
       content = JSON.stringify(data.data, null, 2);
     } else {
-      content = data.data as string;
+      if (typeof data.data !== 'string') {
+        throw new Error('Raw Pi file updates require string data');
+      }
+      content = data.data;
     }
 
     // Ensure directory exists

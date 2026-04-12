@@ -247,3 +247,36 @@ export interface PiFileDocument {
   /** Last modified timestamp */
   last_modified: string;
 }
+
+/**
+ * A Pi-facing MCP tool call result normalized for custom Pi tools.
+ */
+export interface PiMcpToolCallResult {
+  /** MCP content blocks normalized to the Pi tool result shape */
+  content: Array<
+    | {
+        type: 'text';
+        text: string;
+      }
+    | {
+        type: 'image';
+        data: string;
+        mimeType: string;
+      }
+  >;
+
+  /** Whether the upstream MCP tool reported an error result */
+  is_error: boolean;
+
+  /** MCP server ID used for the tool call */
+  server_id: string;
+
+  /** MCP server name used for the tool call */
+  server_name: string;
+
+  /** MCP tool name that was executed */
+  tool_name: string;
+
+  /** Additional structured details for logs and UI */
+  details?: Record<string, unknown>;
+}

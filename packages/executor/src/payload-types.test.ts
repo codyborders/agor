@@ -64,6 +64,25 @@ describe('PromptPayloadSchema', () => {
     expect(result.params.permissionMode).toBe('auto');
   });
 
+  it('should parse prompt payload for Pi', () => {
+    const payload = {
+      command: 'prompt',
+      sessionToken: 'jwt-token-here',
+      params: {
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        taskId: '550e8400-e29b-41d4-a716-446655440001',
+        prompt: 'Use Pi for this task',
+        tool: 'pi',
+        permissionMode: 'acceptEdits',
+        cwd: '/home/user/project',
+      },
+    };
+
+    const result = PromptPayloadSchema.parse(payload);
+    expect(result.params.tool).toBe('pi');
+    expect(result.params.permissionMode).toBe('acceptEdits');
+  });
+
   it('should reject invalid tool type', () => {
     const payload = {
       command: 'prompt',

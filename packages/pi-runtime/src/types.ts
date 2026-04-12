@@ -177,23 +177,6 @@ export interface ForkSessionOptions {
 }
 
 /**
- * MCP bridge configuration.
- */
-export interface McpBridgeConfig {
-  serverUrl: string;
-  sessionToken: string;
-  servers: Array<{
-    id: string;
-    name: string;
-    command: string;
-    args?: string[];
-    env?: Record<string, string>;
-  }>;
-  worktreePath: string;
-  userId: string;
-}
-
-/**
  * Compaction event.
  */
 export interface CompactionEvent {

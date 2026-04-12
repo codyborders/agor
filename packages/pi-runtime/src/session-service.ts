@@ -3,23 +3,19 @@
 /**
  * PiSessionService - manages native Pi sessions.
  *
- * Handles:
- * - Session creation (new native Pi root sessions)
- * - Session resumption (switching to a branch)
- * - Session forking (creating branches within a root session)
- * - Session spawning (creating new root sessions linked via Agor genealogy)
- * - Session import (importing existing native Pi sessions into Agor)
- * - Session listing (discovering native Pi sessions)
+ * Uses Pi's real SessionManager and JSONL session files rather than a parallel
+ * Agor-only format.
  */
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { PiEnvironmentManager } from './environment-manager.js';
+import { SessionManager } from '@mariozechner/pi-coding-agent';
 import { getPiEnvironmentManager } from './environment-manager.js';
 import type {
   CreateSessionOptions,
   ForkSessionOptions,
   PiNativeBinding,
+  PiNativeBranch,
   PiNativeSessionSummary,
   PiNativeSessionTree,
   PiToolOptions,
@@ -29,53 +25,109 @@ import type {
 export class PiSessionService {
   private envManager = getPiEnvironmentManager();
 
+  private getEffectiveCwd(worktreePath?: string): string {
+    return path.resolve(worktreePath ?? process.cwd());
+  }
+
+  private async getSessionDir(worktreePath?: string): Promise<string> {
+    return this.envManager.resolveSessionDir(worktreePath);
+  }
+
+  private countLeafNodes(branches: PiNativeBranch[]): number {
+    if (branches.length === 0) {
+      return 0;
+    }
+
+    const parentBranchIds = new Set(
+      branches
+        .map((branch) => branch.parent_branch_id)
+        .filter((branchId): branchId is string => Boolean(branchId))
+    );
+
+    return branches.filter((branch) => !parentBranchIds.has(branch.branch_id)).length;
+  }
+
+  private getBranchLabel(sessionManager: SessionManager, branchId: string): string | undefined {
+    const explicitLabel = sessionManager.getLabel(branchId);
+    if (explicitLabel) {
+      return explicitLabel;
+    }
+
+    if (sessionManager.getLeafId() === branchId) {
+      return sessionManager.getSessionName();
+    }
+
+    return undefined;
+  }
+
+  private mapBranches(sessionManager: SessionManager): PiNativeBranch[] {
+    return sessionManager.getEntries().map((entry) => ({
+      branch_id: entry.id,
+      parent_branch_id: entry.parentId ?? undefined,
+      label: this.getBranchLabel(sessionManager, entry.id),
+      created_at: entry.timestamp,
+      last_modified: entry.timestamp,
+    }));
+  }
+
+  private async buildSummary(
+    sessionManager: SessionManager,
+    sessionFilePath: string
+  ): Promise<PiNativeSessionSummary> {
+    const branches = this.mapBranches(sessionManager);
+    const leafId = sessionManager.getLeafId() ?? '';
+    const stats = await fs.stat(sessionFilePath);
+
+    return {
+      root_session_id: sessionManager.getSessionId(),
+      session_file_path: sessionFilePath,
+      current_branch_id: leafId,
+      current_branch_label: leafId ? this.getBranchLabel(sessionManager, leafId) : undefined,
+      last_modified: stats.mtime.toISOString(),
+      branch_count: this.countLeafNodes(branches),
+    };
+  }
+
+  private async openSession(
+    rootSessionId: string,
+    worktreePath?: string
+  ): Promise<{ sessionFilePath: string; sessionManager: SessionManager }> {
+    const sessionFilePath = await this.findSessionFile(rootSessionId, worktreePath);
+    if (!sessionFilePath) {
+      throw new Error(`Session not found: ${rootSessionId}`);
+    }
+
+    const sessionDir = await this.getSessionDir(worktreePath);
+    const cwd = this.getEffectiveCwd(worktreePath);
+    const sessionManager = SessionManager.open(sessionFilePath, sessionDir, cwd);
+    return { sessionFilePath, sessionManager };
+  }
+
   /**
    * Create a new native Pi session.
    */
   async createSession(options: CreateSessionOptions): Promise<PiNativeBinding> {
-    const worktreePath = options.worktreePath;
-    const paths = await this.envManager.getPaths(worktreePath);
+    const cwd = this.getEffectiveCwd(options.worktreePath);
+    const sessionDir = await this.getSessionDir(options.worktreePath);
+    const sessionManager = SessionManager.create(cwd, sessionDir);
+    const sessionFilePath = sessionManager.newSession(
+      options.parentSessionId ? { parentSession: options.parentSessionId } : undefined
+    );
 
-    // Determine session file path
-    const sessionDir =
-      options.worktreePath && paths.projectSessionsPath
-        ? paths.projectSessionsPath
-        : paths.globalSessionsPath;
+    if (!sessionFilePath) {
+      throw new Error('Pi session creation did not produce a session file');
+    }
 
-    // Ensure directory exists
-    await fs.mkdir(sessionDir, { recursive: true });
-
-    // Generate unique root session ID
-    const rootSessionId = `pi_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-    const branchId = `${rootSessionId}/main`;
-
-    // Create session file path
-    const sessionFilePath = path.join(sessionDir, `${rootSessionId}.json`);
-
-    // Session file structure (simplified - actual Pi format may differ)
-    const sessionData = {
-      id: rootSessionId,
-      branches: [
-        {
-          id: branchId,
-          label: options.branchLabel || 'main',
-          parent_id: null,
-          created_at: new Date().toISOString(),
-          last_modified: new Date().toISOString(),
-        },
-      ],
-      active_branch_id: branchId,
-      created_at: new Date().toISOString(),
-      tool_options: options.toolOptions || {},
-    };
-
-    await fs.writeFile(sessionFilePath, JSON.stringify(sessionData, null, 2));
+    const branchLabel = options.branchLabel?.trim();
+    if (branchLabel) {
+      sessionManager.appendSessionInfo(branchLabel);
+    }
 
     return {
-      root_session_id: rootSessionId,
-      branch_id: branchId,
+      root_session_id: sessionManager.getSessionId(),
+      branch_id: sessionManager.getLeafId() ?? '',
       session_file_path: sessionFilePath,
-      branch_label: options.branchLabel || 'main',
+      branch_label: branchLabel || undefined,
       imported: false,
       last_synced_at: new Date().toISOString(),
     };
@@ -85,72 +137,57 @@ export class PiSessionService {
    * Resume an existing native Pi session (switch to a branch).
    */
   async resumeSession(options: ResumeSessionOptions): Promise<PiNativeBinding> {
-    const paths = await this.envManager.getPaths(options.worktreePath);
+    const { sessionFilePath, sessionManager } = await this.openSession(
+      options.rootSessionId,
+      options.worktreePath
+    );
 
-    // Find the session file
-    const sessionFilePath = await this.findSessionFile(options.rootSessionId, paths);
+    if (options.branchId) {
+      const branchEntry = sessionManager.getEntry(options.branchId);
+      if (!branchEntry) {
+        throw new Error(`Branch not found: ${options.branchId}`);
+      }
 
-    if (!sessionFilePath) {
-      throw new Error(`Session not found: ${options.rootSessionId}`);
-    }
-
-    // Read and validate session
-    const sessionContent = await fs.readFile(sessionFilePath, 'utf-8');
-    const sessionData = JSON.parse(sessionContent);
-
-    const branch = sessionData.branches?.find((b: { id: string }) => b.id === options.branchId);
-    if (!branch) {
-      throw new Error(`Branch not found: ${options.branchId}`);
+      if (sessionManager.getLeafId() !== options.branchId) {
+        sessionManager.branch(options.branchId);
+      }
     }
 
     return {
       root_session_id: options.rootSessionId,
       branch_id: options.branchId,
       session_file_path: sessionFilePath,
-      branch_label: branch.label,
+      branch_label: options.branchId
+        ? this.getBranchLabel(sessionManager, options.branchId)
+        : sessionManager.getSessionName(),
       imported: true,
       last_synced_at: new Date().toISOString(),
     };
   }
 
   /**
-   * Fork a session (create a new branch).
+   * Fork a session by returning a binding anchored to the requested source branch.
+   *
+   * Pi creates the actual divergent branch lazily on the next appended entry.
    */
   async forkSession(options: ForkSessionOptions): Promise<PiNativeBinding> {
-    const paths = await this.envManager.getPaths(options.worktreePath);
+    const { sessionFilePath, sessionManager } = await this.openSession(
+      options.parentRootSessionId,
+      options.worktreePath
+    );
 
-    // Find the parent session file
-    const sessionFilePath = await this.findSessionFile(options.parentRootSessionId, paths);
-
-    if (!sessionFilePath) {
-      throw new Error(`Session not found: ${options.parentRootSessionId}`);
+    const sourceBranch = sessionManager.getEntry(options.sourceBranchId);
+    if (!sourceBranch) {
+      throw new Error(`Branch not found: ${options.sourceBranchId}`);
     }
-
-    // Read session
-    const sessionContent = await fs.readFile(sessionFilePath, 'utf-8');
-    const sessionData = JSON.parse(sessionContent);
-
-    // Create new branch
-    const newBranchId = `${options.parentRootSessionId}/${Date.now()}`;
-    const newBranch = {
-      id: newBranchId,
-      label: options.newBranchLabel || `branch-${Date.now()}`,
-      parent_id: options.sourceBranchId,
-      created_at: new Date().toISOString(),
-      last_modified: new Date().toISOString(),
-    };
-
-    sessionData.branches.push(newBranch);
-    sessionData.last_modified = new Date().toISOString();
-
-    // Write updated session
-    await fs.writeFile(sessionFilePath, JSON.stringify(sessionData, null, 2));
 
     return {
       root_session_id: options.parentRootSessionId,
-      branch_id: newBranchId,
+      branch_id: options.sourceBranchId,
       session_file_path: sessionFilePath,
-      branch_label: newBranch.label,
+      branch_label:
+        options.newBranchLabel?.trim() ||
+        this.getBranchLabel(sessionManager, options.sourceBranchId),
       imported: false,
       last_synced_at: new Date().toISOString(),
     };
@@ -160,103 +197,62 @@ export class PiSessionService {
    * List native Pi sessions.
    */
   async listSessions(worktreePath?: string): Promise<PiNativeSessionSummary[]> {
-    const paths = await this.envManager.getPaths(worktreePath);
-    const sessions: PiNativeSessionSummary[] = [];
+    if (worktreePath) {
+      const cwd = this.getEffectiveCwd(worktreePath);
+      const sessionDir = await this.getSessionDir(worktreePath);
+      const sessions = await SessionManager.list(cwd, sessionDir);
 
-    // Check global sessions
-    try {
-      const globalSessions = await this.listSessionsInDir(paths.globalSessionsPath);
-      sessions.push(...globalSessions);
-    } catch {
-      // Directory doesn't exist
+      return Promise.all(
+        sessions.map(async (session) => {
+          const sessionManager = SessionManager.open(session.path, sessionDir, cwd);
+          return this.buildSummary(sessionManager, session.path);
+        })
+      );
     }
 
-    // Check project sessions
-    if (paths.projectSessionsPath) {
-      try {
-        const projectSessions = await this.listSessionsInDir(paths.projectSessionsPath);
-        sessions.push(...projectSessions);
-      } catch {
-        // Directory doesn't exist
-      }
-    }
-
-    return sessions;
+    const sessions = await SessionManager.listAll();
+    return Promise.all(
+      sessions.map(async (session) => {
+        const sessionManager = SessionManager.open(session.path);
+        return this.buildSummary(sessionManager, session.path);
+      })
+    );
   }
 
   /**
    * Get full session tree for a root session.
    */
   async getSessionTree(rootSessionId: string, worktreePath?: string): Promise<PiNativeSessionTree> {
-    const paths = await this.envManager.getPaths(worktreePath);
-    const sessionFilePath = await this.findSessionFile(rootSessionId, paths);
-
-    if (!sessionFilePath) {
-      throw new Error(`Session not found: ${rootSessionId}`);
-    }
-
-    const sessionContent = await fs.readFile(sessionFilePath, 'utf-8');
-    const sessionData = JSON.parse(sessionContent);
-
-    const branches = sessionData.branches.map(
-      (b: {
-        id: string;
-        label?: string;
-        parent_id?: string;
-        created_at: string;
-        last_modified: string;
-      }) => ({
-        branch_id: b.id,
-        parent_branch_id: b.parent_id,
-        label: b.label,
-        created_at: b.created_at,
-        last_modified: b.last_modified,
-      })
-    );
+    const { sessionFilePath, sessionManager } = await this.openSession(rootSessionId, worktreePath);
+    const branches = this.mapBranches(sessionManager);
 
     return {
-      summary: {
-        root_session_id: rootSessionId,
-        session_file_path: sessionFilePath,
-        current_branch_id: sessionData.active_branch_id,
-        current_branch_label: branches.find(
-          (b: { branch_id: string }) => b.branch_id === sessionData.active_branch_id
-        )?.label,
-        last_modified: sessionData.last_modified,
-        branch_count: branches.length,
-      },
+      summary: await this.buildSummary(sessionManager, sessionFilePath),
       branches,
-      active_branch_id: sessionData.active_branch_id,
+      active_branch_id: sessionManager.getLeafId() ?? '',
     };
   }
 
   /**
-   * Update tool options for a session branch.
+   * Pi does not expose native per-branch tool option storage.
+   * Agor stores these settings on the Agor session record instead.
    */
   async updateToolOptions(
     rootSessionId: string,
     branchId: string,
-    toolOptions: PiToolOptions,
+    _toolOptions: PiToolOptions,
     worktreePath?: string
   ): Promise<void> {
-    const paths = await this.envManager.getPaths(worktreePath);
-    const sessionFilePath = await this.findSessionFile(rootSessionId, paths);
+    const { sessionManager } = await this.openSession(rootSessionId, worktreePath);
+    const branch = sessionManager.getEntry(branchId);
 
-    if (!sessionFilePath) {
-      throw new Error(`Session not found: ${rootSessionId}`);
+    if (!branch) {
+      throw new Error(`Branch not found: ${branchId}`);
     }
 
-    const sessionContent = await fs.readFile(sessionFilePath, 'utf-8');
-    const sessionData = JSON.parse(sessionContent);
-
-    // Update branch tool options
-    const branch = sessionData.branches.find((b: { id: string }) => b.id === branchId);
-    if (branch) {
-      branch.tool_options = { ...branch.tool_options, ...toolOptions };
-      branch.last_modified = new Date().toISOString();
-      sessionData.last_modified = new Date().toISOString();
-      await fs.writeFile(sessionFilePath, JSON.stringify(sessionData, null, 2));
-    }
+    throw new Error(
+      'Pi native sessions do not support persisted per-branch tool options. Store these on the Agor session record instead.'
+    );
   }
 
   /**
@@ -264,62 +260,19 @@ export class PiSessionService {
    */
   private async findSessionFile(
     rootSessionId: string,
-    paths: Awaited<ReturnType<PiEnvironmentManager['getPaths']>>
+    worktreePath?: string
   ): Promise<string | null> {
-    // Search in global sessions
-    try {
-      const globalFile = path.join(paths.globalSessionsPath, `${rootSessionId}.json`);
-      await fs.access(globalFile);
-      return globalFile;
-    } catch {
-      // Not in global
+    if (worktreePath) {
+      const cwd = this.getEffectiveCwd(worktreePath);
+      const sessionDir = await this.getSessionDir(worktreePath);
+      const sessions = await SessionManager.list(cwd, sessionDir);
+      const session = sessions.find((candidate) => candidate.id === rootSessionId);
+      return session?.path ?? null;
     }
 
-    // Search in project sessions
-    if (paths.projectSessionsPath) {
-      try {
-        const projectFile = path.join(paths.projectSessionsPath, `${rootSessionId}.json`);
-        await fs.access(projectFile);
-        return projectFile;
-      } catch {
-        // Not in project
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * List sessions in a directory.
-   */
-  private async listSessionsInDir(dirPath: string): Promise<PiNativeSessionSummary[]> {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
-    const sessions: PiNativeSessionSummary[] = [];
-
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.json')) {
-        try {
-          const filePath = path.join(dirPath, entry.name);
-          const content = await fs.readFile(filePath, 'utf-8');
-          const data = JSON.parse(content);
-
-          sessions.push({
-            root_session_id: data.id,
-            session_file_path: filePath,
-            current_branch_id: data.active_branch_id,
-            current_branch_label: data.branches?.find(
-              (b: { id: string }) => b.id === data.active_branch_id
-            )?.label,
-            last_modified: data.last_modified,
-            branch_count: data.branches?.length || 1,
-          });
-        } catch {
-          // Skip invalid session files
-        }
-      }
-    }
-
-    return sessions;
+    const sessions = await SessionManager.listAll();
+    const session = sessions.find((candidate) => candidate.id === rootSessionId);
+    return session?.path ?? null;
   }
 }
 
