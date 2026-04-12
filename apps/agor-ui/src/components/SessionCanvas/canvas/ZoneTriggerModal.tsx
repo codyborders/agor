@@ -23,8 +23,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AgenticToolOption } from '../../../types';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 import { AgenticToolConfigForm } from '../../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../../AgenticToolConfigForm/normalizeAgenticToolForm';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 import type { ModelConfig } from '../../ModelSelector';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../../PiAgentConfigForm/piToolOptionsForm';
 
 interface ZoneTriggerModalProps {
   open: boolean;
@@ -49,6 +54,9 @@ interface ZoneTriggerModalProps {
     modelConfig?: ModelConfig;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
+    toolOptions?: {
+      pi?: import('@agor/core/types').PiToolOptions;
+    };
   }) => Promise<void>;
 }
 
@@ -90,6 +98,9 @@ export const ZoneTriggerModal = ({
     modelConfig?: ModelConfig;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
+    toolOptions?: {
+      pi?: import('@agor/core/types').PiToolOptions;
+    };
   }>({});
 
   // Filter sessions for this worktree using O(1) Map lookup
@@ -167,10 +178,16 @@ export const ZoneTriggerModal = ({
           mostRecentSession?.model_config ||
           (agentDefaults?.modelConfig as ModelConfig | undefined),
         mcpServerIds: effectiveMcpServerIds,
+        toolOptions:
+          mostRecentSession?.tool_options ??
+          normalizePiToolOptionsFormState(agentDefaults?.toolOptions),
       };
 
       // Store in both form (for UI) AND component state (for execution)
-      form.setFieldsValue(configValues);
+      form.setFieldsValue({
+        ...configValues,
+        toolOptions: getPiToolOptionsFormState(configValues.toolOptions),
+      });
       setSessionConfig(configValues);
     }
   }, [mode, selectedAgent, currentUser, worktreeSessions, form, worktree?.mcp_server_ids]);
@@ -183,6 +200,7 @@ export const ZoneTriggerModal = ({
         agent: selectedSession.agentic_tool,
         permissionMode: selectedSession.permission_config?.mode,
         modelConfig: selectedSession.model_config,
+        toolOptions: getPiToolOptionsFormState(selectedSession.tool_options),
         // Note: mcpServerIds would need to be fetched separately if we want to show them
       });
     }
@@ -266,6 +284,7 @@ export const ZoneTriggerModal = ({
         modelConfig: sessionConfig.modelConfig,
         permissionMode: sessionConfig.permissionMode,
         mcpServerIds: sessionConfig.mcpServerIds,
+        toolOptions: sessionConfig.toolOptions,
       });
     } else {
       // Reuse existing session
@@ -284,8 +303,11 @@ export const ZoneTriggerModal = ({
       if (selectedAction === 'fork' || selectedAction === 'spawn') {
         // Include additional config for fork/spawn (eventual support for changing config)
         params.agent = formValues.agent || selectedSession?.agentic_tool;
-        params.modelConfig = formValues.modelConfig;
+        params.modelConfig = normalizeModelConfigFormValue(formValues.modelConfig) as
+          | ModelConfig
+          | undefined;
         params.mcpServerIds = formValues.mcpServerIds;
+        params.toolOptions = normalizePiToolOptionsFormState(formValues.toolOptions);
       }
 
       await onExecute(params);

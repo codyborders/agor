@@ -808,8 +808,10 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
               updated_at: new Date().toISOString(),
               thinkingMode: userToolDefaults.modelConfig.thinkingMode,
               manualThinkingTokens: userToolDefaults.modelConfig.manualThinkingTokens,
+              provider: userToolDefaults.modelConfig.provider,
             };
           }
+          const toolOptions = userToolDefaults?.toolOptions;
 
           // MCP server inheritance: worktree config > user defaults
           const mcpServerIds =
@@ -827,6 +829,7 @@ export function registerWorktreeTools(server: McpServer, ctx: McpContext): void 
             unix_username: user.unix_username,
             permission_config: permissionConfig,
             ...(modelConfig && { model_config: modelConfig }),
+            ...(toolOptions && { tool_options: toolOptions }),
             git_state: {
               ref: currentRef,
               base_sha: currentSha,

@@ -712,8 +712,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           updated_at: new Date().toISOString(),
           thinkingMode: userToolDefaults.modelConfig.thinkingMode,
           manualThinkingTokens: userToolDefaults.modelConfig.manualThinkingTokens,
+          provider: userToolDefaults.modelConfig.provider,
         };
       }
+      const toolOptions = userToolDefaults?.toolOptions;
 
       // MCP server inheritance: explicit param > worktree config > user defaults
       // An explicit empty array means "no MCPs" — does NOT fall through to worktree/user defaults.
@@ -771,6 +773,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         unix_username: user.unix_username,
         permission_config: permissionConfig,
         ...(modelConfig && { model_config: modelConfig }),
+        ...(toolOptions && { tool_options: toolOptions }),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
         git_state: {

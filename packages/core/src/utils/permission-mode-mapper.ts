@@ -32,6 +32,7 @@ export function mapPermissionMode(
   switch (agenticTool) {
     case 'claude-code':
     case 'copilot':
+    case 'pi':
       // Claude Code native modes: default, acceptEdits, bypassPermissions, plan, dontAsk
       switch (mode) {
         // Native Claude modes - pass through

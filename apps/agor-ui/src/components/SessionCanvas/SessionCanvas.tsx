@@ -2707,6 +2707,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               modelConfig,
               permissionMode,
               mcpServerIds,
+              toolOptions,
             }) => {
               if (!client) {
                 console.error('❌ Cannot execute trigger: client not available');
@@ -2730,6 +2731,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                           updated_at: new Date().toISOString(),
                         }
                       : undefined,
+                    tool_options: toolOptions,
                     permission_config: permissionMode
                       ? {
                           mode: permissionMode,

@@ -40,4 +40,10 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     description: 'GitHub Copilot agentic runtime',
     beta: true,
   },
+  {
+    id: 'pi',
+    name: 'Pi',
+    icon: 'π',
+    description: 'Pi coding agent with native session management',
+  },
 ];

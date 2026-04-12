@@ -11,6 +11,7 @@ import type {
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
 import type { BoardID, SessionID, TaskID, WorktreeID } from './id';
+import type { PiNativeBinding, PiToolOptions } from './pi';
 
 export const SessionStatus = {
   IDLE: 'idle',
@@ -94,6 +95,8 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
       return 'autoEdit'; // OpenCode auto-approves, similar to Gemini
     case 'copilot':
       return 'acceptEdits'; // Copilot uses same semantics as Claude Code
+    case 'pi':
+      return 'acceptEdits'; // Pi uses similar approval semantics as Claude Code
     default:
       return 'acceptEdits'; // Claude Code native mode
   }
@@ -234,6 +237,28 @@ export interface Session {
      * Only applicable when agentic_tool='opencode'
      */
     provider?: string;
+  };
+
+  // Tool-specific options (agent-specific runtime settings)
+  /**
+   * Tool-specific options per agent.
+   * Each agent can have its own options namespace here.
+   */
+  tool_options?: {
+    /** Pi-specific tool options */
+    pi?: PiToolOptions;
+  };
+
+  // Native binding (for agents that store sessions externally)
+  /**
+   * Native session binding for agents that maintain their own session storage.
+   *
+   * For Pi: Links to native Pi sessions in ~/.pi/agent or <worktree>/.pi/
+   * This allows Agor to read/write native Pi session state directly.
+   */
+  native_binding?: {
+    /** Pi native session binding */
+    pi?: PiNativeBinding;
   };
 
   // Custom context for Handlebars templates
@@ -510,8 +535,14 @@ export interface SpawnConfig {
   modelConfig?: {
     mode?: 'alias' | 'exact';
     model?: string;
+    provider?: string;
     thinkingMode?: 'auto' | 'manual' | 'off';
     manualThinkingTokens?: number;
+  };
+
+  /** Tool-specific options override */
+  toolOptions?: {
+    pi?: PiToolOptions;
   };
 
   /** Codex sandbox mode (codex only) */

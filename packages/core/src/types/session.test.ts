@@ -28,6 +28,10 @@ describe('getDefaultPermissionMode', () => {
     expect(getDefaultPermissionMode('opencode')).toBe('autoEdit');
   });
 
+  it('returns "acceptEdits" for pi (Claude-like defaults)', () => {
+    expect(getDefaultPermissionMode('pi')).toBe('acceptEdits');
+  });
+
   it('returns "acceptEdits" for any unknown tool (default case)', () => {
     // Type assertion to test default behavior with invalid input
     const unknownTool = 'unknown-tool' as AgenticToolName;
@@ -65,7 +69,14 @@ describe('getDefaultPermissionMode', () => {
 
   describe('all agentic tools coverage', () => {
     it('handles all valid AgenticToolName values', () => {
-      const allTools: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
+      const allTools: AgenticToolName[] = [
+        'claude-code',
+        'codex',
+        'gemini',
+        'opencode',
+        'copilot',
+        'pi',
+      ];
       const results: Record<string, string> = {};
 
       for (const tool of allTools) {
@@ -77,10 +88,19 @@ describe('getDefaultPermissionMode', () => {
       expect(results.codex).toBe('auto');
       expect(results.gemini).toBe('autoEdit');
       expect(results.opencode).toBe('autoEdit');
+      expect(results.copilot).toBe('acceptEdits');
+      expect(results.pi).toBe('acceptEdits');
     });
 
     it('returns valid PermissionMode values', () => {
-      const allTools: AgenticToolName[] = ['claude-code', 'codex', 'gemini', 'opencode'];
+      const allTools: AgenticToolName[] = [
+        'claude-code',
+        'codex',
+        'gemini',
+        'opencode',
+        'copilot',
+        'pi',
+      ];
       const validModes = [
         // Claude Code native modes
         'default',

@@ -11,6 +11,11 @@ import { Button, Form, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../AgenticToolConfigForm/normalizeAgenticToolForm';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../PiAgentConfigForm/piToolOptionsForm';
 
 interface DefaultAgenticSettingsProps {
   /** Current default agentic config */
@@ -34,6 +39,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
+  const [piForm] = Form.useForm();
 
   const [saving, setSaving] = useState<Record<AgenticToolName, boolean>>({
     'claude-code': false,
@@ -41,6 +47,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
     gemini: false,
     opencode: false,
     copilot: false,
+    pi: false,
   });
   const [activeTab, setActiveTab] = useState<AgenticToolName>('claude-code');
 
@@ -58,6 +65,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       modelConfig: toolConfig.modelConfig,
       permissionMode: toolConfig.permissionMode || getDefaultPermissionMode(tool),
       mcpServerIds: toolConfig.mcpServerIds || [],
+      toolOptions: getPiToolOptionsFormState(toolConfig.toolOptions),
       ...(tool === 'codex' && {
         codexSandboxMode: toolConfig.codexSandboxMode,
         codexApprovalPolicy: toolConfig.codexApprovalPolicy,
@@ -78,6 +86,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
         return opencodeForm;
       case 'copilot':
         return copilotForm;
+      case 'pi':
+        return piForm;
     }
   };
 
@@ -91,9 +101,10 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       const newConfig: DefaultAgenticConfig = {
         ...defaultConfig,
         [tool]: {
-          modelConfig: values.modelConfig,
+          modelConfig: normalizeModelConfigFormValue(values.modelConfig),
           permissionMode: values.permissionMode,
           mcpServerIds: values.mcpServerIds,
+          toolOptions: normalizePiToolOptionsFormState(values.toolOptions),
           ...(tool === 'codex' && {
             codexSandboxMode: values.codexSandboxMode,
             codexApprovalPolicy: values.codexApprovalPolicy,
@@ -118,6 +129,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       modelConfig: undefined,
       permissionMode: getDefaultPermissionMode(tool),
       mcpServerIds: [],
+      toolOptions: undefined,
       ...(tool === 'codex' && {
         codexSandboxMode: undefined,
         codexApprovalPolicy: undefined,
@@ -161,6 +173,12 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
       label: 'GitHub Copilot',
       tool: 'copilot',
       form: copilotForm,
+    },
+    {
+      key: 'pi',
+      label: 'Pi',
+      tool: 'pi',
+      form: piForm,
     },
   ];
 

@@ -58,9 +58,14 @@ import { copyToClipboard } from '@/utils/clipboard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../AgenticToolConfigForm/normalizeAgenticToolForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../PiAgentConfigForm/piToolOptionsForm';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -1193,6 +1198,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         permissionMode: agentDefaults.permissionMode,
         modelConfig: agentDefaults.modelConfig,
         mcpServerIds: agentDefaults.mcpServerIds,
+        toolOptions: getPiToolOptionsFormState(agentDefaults.toolOptions),
         codexSandboxMode: agentDefaults.codexSandboxMode,
         codexApprovalPolicy: agentDefaults.codexApprovalPolicy,
         codexNetworkAccess: agentDefaults.codexNetworkAccess,
@@ -1254,13 +1260,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
 
     // Build agentic config from form values
+    const normalizedModelConfig = normalizeModelConfigFormValue(values.modelConfig);
+    const normalizedToolOptions = normalizePiToolOptionsFormState(values.toolOptions);
+
     const agenticConfig: GatewayAgenticConfig = {
       agent: (agent || 'claude-code') as AgenticToolName,
       ...(values.permissionMode ? { permissionMode: values.permissionMode as PermissionMode } : {}),
-      ...(values.modelConfig
-        ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
-        : {}),
+      ...(normalizedModelConfig ? { modelConfig: normalizedModelConfig } : {}),
       ...(values.mcpServerIds ? { mcpServerIds: values.mcpServerIds as string[] } : {}),
+      ...(normalizedToolOptions ? { toolOptions: normalizedToolOptions } : {}),
       ...(values.codexSandboxMode
         ? { codexSandboxMode: values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'] }
         : {}),
@@ -1346,6 +1354,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       permissionMode: channel.agentic_config?.permissionMode,
       modelConfig: channel.agentic_config?.modelConfig,
       mcpServerIds: channel.agentic_config?.mcpServerIds,
+      toolOptions: getPiToolOptionsFormState(channel.agentic_config?.toolOptions),
       codexSandboxMode: channel.agentic_config?.codexSandboxMode,
       codexApprovalPolicy: channel.agentic_config?.codexApprovalPolicy,
       codexNetworkAccess: channel.agentic_config?.codexNetworkAccess,

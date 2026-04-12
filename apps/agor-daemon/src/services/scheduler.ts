@@ -350,9 +350,11 @@ export class SchedulerService {
             ? {
                 mode: 'exact',
                 model: schedule.model_config.model,
+                provider: schedule.model_config.provider,
                 updated_at: new Date(now).toISOString(),
               }
             : undefined,
+        tool_options: schedule.tool_options,
         custom_context: {
           scheduled_run: {
             rendered_prompt: renderedPrompt,

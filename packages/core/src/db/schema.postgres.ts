@@ -74,7 +74,7 @@ export const sessions = pgTable(
       ],
     }).notNull(),
     agentic_tool: text('agentic_tool', {
-      enum: ['claude-code', 'codex', 'gemini', 'opencode', 'copilot'],
+      enum: ['claude-code', 'codex', 'gemini', 'opencode', 'copilot', 'pi'],
     }).notNull(),
     board_id: varchar('board_id', { length: 36 }), // NULL = no board
 
@@ -524,12 +524,21 @@ export const worktrees = pgTable(
         schedule?: {
           timezone: string; // IANA timezone (default: 'UTC')
           prompt_template: string; // Handlebars template
-          agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+          agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'pi';
           retention: number; // How many sessions to keep (0 = keep forever)
           permission_mode?: string; // Permission mode for spawned sessions
           model_config?: {
             mode: 'default' | 'custom';
             model?: string;
+            provider?: string;
+          };
+          tool_options?: {
+            pi?: {
+              reasoning_effort?: string;
+              compaction_mode?: 'inherit' | 'off' | 'auto' | 'manual';
+              compaction_threshold_tokens?: number;
+              raw_overrides?: Record<string, unknown>;
+            };
           };
           mcp_server_ids?: string[]; // MCP servers to attach (default: ['agor'])
           context_files?: string[]; // Additional context files
@@ -682,6 +691,22 @@ export const users = pgTable(
             };
             permissionMode?: string;
             mcpServerIds?: string[];
+          };
+          pi?: {
+            modelConfig?: {
+              mode?: 'alias' | 'exact';
+              model?: string;
+              provider?: string;
+            };
+            mcpServerIds?: string[];
+            toolOptions?: {
+              pi?: {
+                reasoning_effort?: string;
+                compaction_mode?: 'inherit' | 'off' | 'auto' | 'manual';
+                compaction_threshold_tokens?: number;
+                raw_overrides?: Record<string, unknown>;
+              };
+            };
           };
         };
       }>()

@@ -63,6 +63,10 @@ export function normalizeRawSdkResponse(
         console.debug('[Normalizer] OpenCode normalizer not implemented yet');
         return undefined;
 
+      case 'pi':
+        console.debug('[Normalizer] Pi normalizer not implemented yet');
+        return undefined;
+
       default:
         console.warn(`[Normalizer] Unknown agentic tool: ${agenticTool}`);
         return undefined;

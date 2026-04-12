@@ -25,6 +25,7 @@ import {
   CODEX_SANDBOX_MODES,
   PermissionModeSelector,
 } from '../PermissionModeSelector';
+import { PiAgentConfigForm } from '../PiAgentConfigForm';
 
 export interface AgenticToolConfigFormProps {
   /** The agentic tool being configured */
@@ -55,6 +56,16 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   showHelpText = true,
   compact = false,
 }) => {
+  if (agenticTool === 'pi') {
+    return (
+      <PiAgentConfigForm
+        mcpServerById={mcpServerById}
+        showHelpText={showHelpText}
+        compact={compact}
+      />
+    );
+  }
+
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
   const showCodexFields = agenticTool === 'codex' && !compact;
 

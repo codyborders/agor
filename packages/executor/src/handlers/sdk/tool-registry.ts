@@ -11,7 +11,7 @@ import type { AgorClient } from '../../services/feathers-client.js';
 /**
  * Tool identifier
  */
-export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot';
+export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'pi';
 
 /**
  * Tool runner function - executes via Feathers WebSocket
@@ -114,12 +114,13 @@ export class ToolRegistry {
  */
 export async function initializeToolRegistry(): Promise<void> {
   // Import all tool handlers
-  const [claude, codex, gemini, opencode, copilot] = await Promise.all([
+  const [claude, codex, gemini, opencode, copilot, pi] = await Promise.all([
     import('./claude.js'),
     import('./codex.js'),
     import('./gemini.js'),
     import('./opencode.js'),
     import('./copilot.js'),
+    import('./pi.js'),
   ]);
 
   // Register Claude Code
@@ -160,5 +161,13 @@ export async function initializeToolRegistry(): Promise<void> {
     name: 'GitHub Copilot',
     apiKeyEnvVar: 'COPILOT_GITHUB_TOKEN', // or GH_TOKEN / GITHUB_TOKEN
     runner: copilot.executeCopilotTask,
+  });
+
+  // Register Pi
+  ToolRegistry.register({
+    tool: 'pi',
+    name: 'Pi',
+    apiKeyEnvVar: 'PI_API_KEY', // Pi may use its own auth
+    runner: pi.executePiTask,
   });
 }

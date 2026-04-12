@@ -1,5 +1,6 @@
 import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
 import type { UserID } from './id';
+import type { PiToolOptions } from './pi';
 import type { PermissionMode } from './session';
 
 /**
@@ -61,6 +62,8 @@ export interface DefaultModelConfig {
   mode?: 'alias' | 'exact';
   /** Model identifier (alias or exact ID) */
   model?: string;
+  /** Optional provider identifier for multi-provider runtimes */
+  provider?: string;
   /** Thinking mode controls extended thinking token allocation */
   thinkingMode?: 'auto' | 'manual' | 'off';
   /** Manual thinking token budget (used when thinkingMode='manual') */
@@ -77,6 +80,10 @@ export interface DefaultAgenticToolConfig {
   permissionMode?: PermissionMode;
   /** Default MCP server IDs to attach */
   mcpServerIds?: string[];
+  /** Tool-specific options keyed by agent namespace */
+  toolOptions?: {
+    pi?: PiToolOptions;
+  };
   /** Codex-specific: sandbox mode */
   codexSandboxMode?: CodexSandboxMode;
   /** Codex-specific: approval policy */
@@ -94,6 +101,7 @@ export interface DefaultAgenticConfig {
   gemini?: DefaultAgenticToolConfig;
   opencode?: DefaultAgenticToolConfig;
   copilot?: DefaultAgenticToolConfig;
+  pi?: DefaultAgenticToolConfig;
 }
 
 /**

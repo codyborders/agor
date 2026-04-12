@@ -28,8 +28,13 @@ import { Collapse, Divider, Form, Modal, Typography } from 'antd';
 import React from 'react';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../AgenticToolConfigForm/normalizeAgenticToolForm';
 import { CallbackConfigForm } from '../CallbackConfigForm';
 import { CodexSettingsForm } from '../CodexSettingsForm';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../PiAgentConfigForm/piToolOptionsForm';
 import { SessionMetadataForm } from '../SessionMetadataForm';
 
 export interface SessionSettingsModalProps {
@@ -50,6 +55,14 @@ interface FormValues {
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
   codexNetworkAccess: boolean;
+  toolOptions?: {
+    pi?: {
+      reasoning_effort?: string;
+      compaction_mode?: 'inherit' | 'off' | 'auto' | 'manual';
+      compaction_threshold_tokens?: number;
+      raw_overrides?: string;
+    };
+  };
   custom_context: string;
   callbackConfig: {
     enabled: boolean;
@@ -74,6 +87,7 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
     codexSandboxMode: session.permission_config?.codex?.sandboxMode || 'workspace-write',
     codexApprovalPolicy: session.permission_config?.codex?.approvalPolicy || 'on-request',
     codexNetworkAccess: session.permission_config?.codex?.networkAccess ?? false,
+    toolOptions: getPiToolOptionsFormState(session.tool_options),
     custom_context: session.custom_context ? JSON.stringify(session.custom_context, null, 2) : '',
     callbackConfig: {
       enabled: session.callback_config?.enabled ?? true,
@@ -90,14 +104,17 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
     updates.title = values.title;
   }
 
-  if (values.modelConfig) {
+  const normalizedModelConfig = normalizeModelConfigFormValue(values.modelConfig);
+  if (normalizedModelConfig) {
     updates.model_config = {
-      ...values.modelConfig,
+      ...normalizedModelConfig,
       updated_at: new Date().toISOString(),
     };
+  } else if (session.model_config) {
+    updates.model_config = undefined;
   }
 
-  if (values.permissionMode) {
+  if (session.agentic_tool !== 'pi' && values.permissionMode) {
     updates.permission_config = {
       ...session.permission_config,
       mode: values.permissionMode,
@@ -121,6 +138,13 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
           values.codexNetworkAccess ?? session.permission_config?.codex?.networkAccess ?? false,
       },
     };
+  }
+
+  const normalizedToolOptions = normalizePiToolOptionsFormState(values.toolOptions);
+  if (normalizedToolOptions) {
+    updates.tool_options = normalizedToolOptions;
+  } else if (session.tool_options?.pi) {
+    updates.tool_options = undefined;
   }
 
   if (values.custom_context) {

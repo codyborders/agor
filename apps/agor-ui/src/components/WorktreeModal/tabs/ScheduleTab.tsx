@@ -20,7 +20,12 @@ import { useEffect, useState } from 'react';
 import { Cron } from 'react-js-cron';
 import 'react-js-cron/dist/styles.css';
 import { AgenticToolConfigForm } from '../../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../../AgenticToolConfigForm/normalizeAgenticToolForm';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../../PiAgentConfigForm/piToolOptionsForm';
 
 const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
@@ -70,6 +75,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
         permissionMode: scheduleConfig?.permission_mode || getDefaultPermissionMode(tool),
         mcpServerIds: scheduleConfig?.mcp_server_ids || [],
         modelConfig: scheduleConfig?.model_config,
+        toolOptions: getPiToolOptionsFormState(scheduleConfig?.tool_options),
       });
 
       setIsInitialized(true);
@@ -107,10 +113,17 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       const scheduleConfig = {
         timezone: 'UTC',
         prompt_template: promptTemplate,
-        agentic_tool: agenticTool as 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot',
+        agentic_tool: agenticTool as
+          | 'claude-code'
+          | 'codex'
+          | 'gemini'
+          | 'opencode'
+          | 'copilot'
+          | 'pi',
         retention: retention,
         permission_mode: formValues.permissionMode,
-        model_config: formValues.modelConfig,
+        model_config: normalizeModelConfigFormValue(formValues.modelConfig),
+        tool_options: normalizePiToolOptionsFormState(formValues.toolOptions),
         mcp_server_ids: formValues.mcpServerIds || [],
         created_at: worktree.schedule?.created_at || Date.now(),
         created_by: worktree.schedule?.created_by || worktree.created_by,
@@ -141,6 +154,8 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       (worktree.schedule?.permission_mode ||
         getDefaultPermissionMode(agenticTool as AgenticToolName)) ||
     JSON.stringify(formValues.modelConfig) !== JSON.stringify(worktree.schedule?.model_config) ||
+    JSON.stringify(formValues.toolOptions) !==
+      JSON.stringify(getPiToolOptionsFormState(worktree.schedule?.tool_options)) ||
     JSON.stringify(formValues.mcpServerIds) !==
       JSON.stringify(worktree.schedule?.mcp_server_ids || []);
 

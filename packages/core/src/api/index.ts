@@ -15,6 +15,11 @@ import type {
   ContextFileListItem,
   MCPServer,
   Message,
+  PiAuthProviderStatus,
+  PiFileDocument,
+  PiInstalledPackage,
+  PiNativeSessionSummary,
+  PiRuntimeStatus,
   Repo,
   Session,
   Task,
@@ -55,6 +60,12 @@ export interface ServiceTypes {
   artifacts: Artifact;
   'mcp-servers': MCPServer;
   context: ContextFileListItem | ContextFileDetail; // GET /context returns list, GET /context/:path returns detail
+  // Pi runtime services
+  'pi-runtime': PiRuntimeStatus;
+  'pi-auth': PiAuthProviderStatus;
+  'pi-packages': PiInstalledPackage;
+  'pi-native-sessions': PiNativeSessionSummary;
+  'pi-files': PiFileDocument;
 }
 
 /**
@@ -320,6 +331,12 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'users'): AgorService<User>;
   service(path: 'mcp-servers'): AgorService<MCPServer>;
   service(path: 'context'): AgorService<ContextFileListItem | ContextFileDetail>;
+  // Pi services
+  service(path: 'pi-runtime'): AgorService<PiRuntimeStatus>;
+  service(path: 'pi-auth'): AgorService<PiAuthProviderStatus>;
+  service(path: 'pi-packages'): AgorService<PiInstalledPackage>;
+  service(path: 'pi-native-sessions'): AgorService<PiNativeSessionSummary>;
+  service(path: 'pi-files'): AgorService<PiFileDocument>;
 
   // Generic fallback for custom routes and dynamic paths
   service<K extends keyof ServiceTypes>(path: K): AgorService<ServiceTypes[K]>;

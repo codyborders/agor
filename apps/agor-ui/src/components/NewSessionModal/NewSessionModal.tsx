@@ -13,12 +13,17 @@ import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../AgenticToolConfigForm/normalizeAgenticToolForm';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import type { ModelConfig } from '../ModelSelector';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../PiAgentConfigForm/piToolOptionsForm';
 
 export interface NewSessionConfig {
   worktree_id: string; // Required - sessions are always created from a worktree
@@ -30,6 +35,9 @@ export interface NewSessionConfig {
   modelConfig?: ModelConfig;
   mcpServerIds?: string[];
   permissionMode?: PermissionMode;
+  toolOptions?: {
+    pi?: import('@agor/core/types').PiToolOptions;
+  };
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
@@ -91,6 +99,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       permissionMode: agentDefaults?.permissionMode || getDefaultPermissionMode('claude-code'),
       mcpServerIds: effectiveMcpServerIds,
       modelConfig: agentDefaults?.modelConfig,
+      toolOptions: getPiToolOptionsFormState(agentDefaults?.toolOptions),
       codexSandboxMode: agentDefaults?.codexSandboxMode || 'workspace-write',
       codexApprovalPolicy: agentDefaults?.codexApprovalPolicy || 'on-request',
       codexNetworkAccess: agentDefaults?.codexNetworkAccess ?? false,
@@ -114,6 +123,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           getDefaultPermissionMode((selectedAgent as AgenticToolName) || 'claude-code'),
         mcpServerIds: effectiveMcpServerIds,
         modelConfig: agentDefaults?.modelConfig,
+        toolOptions: getPiToolOptionsFormState(agentDefaults?.toolOptions),
         ...(selectedAgent === 'codex'
           ? {
               codexSandboxMode: agentDefaults?.codexSandboxMode || 'workspace-write',
@@ -150,12 +160,17 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         title: values.title,
         initialPrompt: values.initialPrompt,
         // Use form values if present (user expanded advanced), otherwise use defaults
-        modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
+        modelConfig:
+          normalizeModelConfigFormValue(values.modelConfig) ??
+          normalizeModelConfigFormValue(agentDefaults?.modelConfig),
         mcpServerIds: values.mcpServerIds ?? fallbackMcpServerIds,
         permissionMode:
           (values.permissionMode as PermissionMode | undefined) ??
           agentDefaults?.permissionMode ??
           getDefaultPermissionMode(selectedAgent as AgenticToolName),
+        toolOptions:
+          normalizePiToolOptionsFormState(values.toolOptions) ??
+          normalizePiToolOptionsFormState(agentDefaults?.toolOptions),
       };
 
       if (selectedAgent === 'codex') {

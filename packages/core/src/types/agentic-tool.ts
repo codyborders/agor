@@ -15,7 +15,7 @@ import type { AgenticToolID } from './id';
  * Not to be confused with "execution tools" (Bash, Write, Read, etc.)
  * which are the primitives that agentic tools use to perform work.
  */
-export type AgenticToolName = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+export type AgenticToolName = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'pi';
 
 /**
  * Agentic tool metadata for UI display
@@ -176,5 +176,10 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
     supportsSessionFork: false,
     supportsChildSpawn: true,
     supportsSessionImport: false,
+  },
+  pi: {
+    supportsSessionFork: true,
+    supportsChildSpawn: true,
+    supportsSessionImport: true,
   },
 };

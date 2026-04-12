@@ -12,9 +12,14 @@ import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../AgenticToolConfigForm/normalizeAgenticToolForm';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../PiAgentConfigForm/piToolOptionsForm';
 
 export type ForkSpawnAction = 'fork' | 'spawn';
 
@@ -78,6 +83,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
       codexNetworkAccess: userDefaults?.codexNetworkAccess,
       mcpServerIds: userDefaults?.mcpServerIds || [],
+      toolOptions: getPiToolOptionsFormState(userDefaults?.toolOptions),
     });
     setSelectedAgent(agentTool);
   }, [open, session, configPreset, form, currentUser]);
@@ -105,11 +111,12 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           // Include full config overrides
           spawnConfig.agent = values.agent || selectedAgent;
           spawnConfig.permissionMode = values.permissionMode;
-          spawnConfig.modelConfig = values.modelConfig;
+          spawnConfig.modelConfig = normalizeModelConfigFormValue(values.modelConfig);
           spawnConfig.codexSandboxMode = values.codexSandboxMode;
           spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
           spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
           spawnConfig.mcpServerIds = values.mcpServerIds;
+          spawnConfig.toolOptions = normalizePiToolOptionsFormState(values.toolOptions);
           spawnConfig.extraInstructions = values.extraInstructions;
         }
 

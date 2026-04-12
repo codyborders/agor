@@ -522,6 +522,7 @@ export class GatewayService {
       userDefaults?.permissionMode ??
       getDefaultPermissionMode(agenticTool);
     const modelConfig = agenticConfig?.modelConfig ?? userDefaults?.modelConfig;
+    const toolOptions = agenticConfig?.toolOptions ?? userDefaults?.toolOptions;
 
     if (existingMapping) {
       // Existing thread → existing session
@@ -599,9 +600,11 @@ export class GatewayService {
           ? {
               mode: modelConfig.mode ?? 'alias',
               model: modelConfig.model ?? '',
+              provider: modelConfig.provider,
               updated_at: new Date().toISOString(),
             }
           : undefined,
+        tool_options: toolOptions,
         tasks: [],
         // Denormalized gateway metadata (immutable snapshot at creation time)
         // Avoids N+1 lookups when rendering board cards

@@ -83,6 +83,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
               updated_at: new Date().toISOString(),
             }
           : undefined,
+        tool_options: config.toolOptions,
         permission_config: permissionConfig,
       } as Partial<Session>);
 

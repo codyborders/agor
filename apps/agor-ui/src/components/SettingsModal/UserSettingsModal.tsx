@@ -30,9 +30,14 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import { normalizeModelConfigFormValue } from '../AgenticToolConfigForm/normalizeAgenticToolForm';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
+import {
+  getPiToolOptionsFormState,
+  normalizePiToolOptionsFormState,
+} from '../PiAgentConfigForm/piToolOptionsForm';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 
@@ -66,6 +71,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [geminiForm] = Form.useForm();
   const [opencodeForm] = Form.useForm();
   const [copilotForm] = Form.useForm();
+  const [piForm] = Form.useForm();
   const [audioForm] = Form.useForm();
 
   // API key management state
@@ -88,6 +94,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     gemini: false,
     opencode: false,
     copilot: false,
+    pi: false,
   });
 
   // Initialize forms when user changes or modal opens
@@ -130,6 +137,24 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         mcpServerIds: defaults?.gemini?.mcpServerIds || [],
       });
 
+      opencodeForm.setFieldsValue({
+        permissionMode: defaults?.opencode?.permissionMode || getDefaultPermissionMode('opencode'),
+        modelConfig: defaults?.opencode?.modelConfig,
+        mcpServerIds: defaults?.opencode?.mcpServerIds || [],
+      });
+
+      copilotForm.setFieldsValue({
+        permissionMode: defaults?.copilot?.permissionMode || getDefaultPermissionMode('copilot'),
+        modelConfig: defaults?.copilot?.modelConfig,
+        mcpServerIds: defaults?.copilot?.mcpServerIds || [],
+      });
+
+      piForm.setFieldsValue({
+        modelConfig: defaults?.pi?.modelConfig,
+        mcpServerIds: defaults?.pi?.mcpServerIds || [],
+        toolOptions: getPiToolOptionsFormState(defaults?.pi?.toolOptions),
+      });
+
       // Initialize audio form with user's preferences
       const audioPrefs = userData.preferences?.audio;
       audioForm.setFieldsValue({
@@ -140,7 +165,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     },
-    [form, claudeForm, codexForm, geminiForm, audioForm]
+    [form, claudeForm, codexForm, geminiForm, opencodeForm, copilotForm, piForm, audioForm]
   );
 
   // Initialize when modal opens with user data
@@ -184,6 +209,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     claudeForm.resetFields();
     codexForm.resetFields();
     geminiForm.resetFields();
+    opencodeForm.resetFields();
+    copilotForm.resetFields();
+    piForm.resetFields();
     setActiveTab('general');
     onClose();
   };
@@ -316,6 +344,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       gemini: geminiForm,
       opencode: opencodeForm,
       copilot: copilotForm,
+      pi: piForm,
     };
 
     const currentForm = formMap[tool];
@@ -328,9 +357,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       const newConfig = {
         ...user.default_agentic_config,
         [tool]: {
-          modelConfig: values.modelConfig,
+          modelConfig: normalizeModelConfigFormValue(values.modelConfig),
           permissionMode: values.permissionMode,
           mcpServerIds: values.mcpServerIds,
+          toolOptions: normalizePiToolOptionsFormState(values.toolOptions),
           ...(tool === 'codex' && {
             codexSandboxMode: values.codexSandboxMode,
             codexApprovalPolicy: values.codexApprovalPolicy,
@@ -360,6 +390,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       gemini: geminiForm,
       opencode: opencodeForm,
       copilot: copilotForm,
+      pi: piForm,
     };
 
     const currentForm = formMap[tool];
@@ -368,6 +399,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       modelConfig: undefined,
       permissionMode: getDefaultPermissionMode(tool),
       mcpServerIds: [],
+      toolOptions: undefined,
       ...(tool === 'codex' && {
         codexSandboxMode: undefined,
         codexApprovalPolicy: undefined,
@@ -422,6 +454,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'codex':
       case 'gemini':
       case 'opencode':
+      case 'copilot':
+      case 'pi':
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
     }
@@ -486,6 +520,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         {
           key: 'opencode',
           label: 'OpenCode',
+          icon: <RobotOutlined />,
+        },
+        {
+          key: 'copilot',
+          label: 'GitHub Copilot',
+          icon: <RobotOutlined />,
+        },
+        {
+          key: 'pi',
+          label: 'Pi',
           icon: <RobotOutlined />,
         },
       ],
@@ -637,6 +681,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           gemini: geminiForm,
           opencode: opencodeForm,
           copilot: copilotForm,
+          pi: piForm,
         };
         const currentForm = formMap[toolName];
         const displayNames: Record<AgenticToolName, string> = {
@@ -645,6 +690,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           gemini: 'Gemini',
           opencode: 'OpenCode',
           copilot: 'Copilot',
+          pi: 'Pi',
         };
         return (
           <>
@@ -682,6 +728,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       codex: 'Codex',
       gemini: 'Gemini',
       opencode: 'OpenCode',
+      copilot: 'GitHub Copilot',
+      pi: 'Pi',
     };
     return titles[activeTab] || 'User Settings';
   };
@@ -714,7 +762,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                     ? savingAgenticConfig.gemini
                     : activeTab === 'opencode'
                       ? savingAgenticConfig.opencode
-                      : false
+                      : activeTab === 'copilot'
+                        ? savingAgenticConfig.copilot
+                        : activeTab === 'pi'
+                          ? savingAgenticConfig.pi
+                          : false
             }
           >
             Save

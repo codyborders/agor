@@ -152,6 +152,8 @@ function apiKeyNameForAgent(agent: AgenticToolName): string {
       return 'COPILOT_GITHUB_TOKEN';
     case 'opencode':
       return 'ANTHROPIC_API_KEY';
+    case 'pi':
+      return 'ANTHROPIC_API_KEY';
     default:
       return 'ANTHROPIC_API_KEY';
   }
@@ -167,6 +169,8 @@ function apiKeyPlaceholder(agent: AgenticToolName): string {
       return 'AIza...';
     case 'copilot':
       return 'ghp_...';
+    case 'pi':
+      return 'sk-ant-...';
     default:
       return 'sk-ant-...';
   }
@@ -178,6 +182,7 @@ const AGENT_LABELS: Record<AgenticToolName, string> = {
   gemini: 'Gemini',
   opencode: 'OpenCode',
   copilot: 'GitHub Copilot',
+  pi: 'Pi',
 };
 
 const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string } | null> = {
@@ -186,6 +191,7 @@ const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string }
   gemini: { label: 'aistudio.google.com', url: 'https://aistudio.google.com/apikey' },
   copilot: { label: 'github.com/features/copilot', url: 'https://github.com/features/copilot' },
   opencode: null,
+  pi: null,
 };
 
 // ─── Component ──────────────────────────────────────────
@@ -277,6 +283,8 @@ export function OnboardingWizard({
         return hasCopilotToken;
       case 'opencode':
         return hasAnthropicKey || hasOpenAIKey || hasGeminiKey;
+      case 'pi':
+        return false;
       default:
         return false;
     }

@@ -456,6 +456,11 @@ import { createHealthMonitor } from './services/health-monitor';
 import { createLeaderboardService } from './services/leaderboard';
 import { createMCPServersService } from './services/mcp-servers';
 import { createMessagesService } from './services/messages';
+import { createPiAuthService } from './services/pi-auth';
+import { createPiFilesService } from './services/pi-files';
+import { createPiNativeSessionsService } from './services/pi-native-sessions';
+import { createPiPackagesService } from './services/pi-packages';
+import { createPiRuntimeService } from './services/pi-runtime';
 import { createReposService } from './services/repos';
 import { SchedulerService } from './services/scheduler';
 import { createSessionMCPServersService } from './services/session-mcp-servers';
@@ -2827,6 +2832,13 @@ async function main() {
   // Store app reference for service method access (app property defined on ConfigService)
   configService.app = app;
   app.use('/config', configService);
+
+  // Register Pi runtime services
+  app.use('/pi-runtime', createPiRuntimeService(db));
+  app.use('/pi-auth', createPiAuthService(db));
+  app.use('/pi-packages', createPiPackagesService(db));
+  app.use('/pi-native-sessions', createPiNativeSessionsService(db));
+  app.use('/pi-files', createPiFilesService(db));
 
   // Register custom method for API key resolution (used by executors)
   app.use('/config/resolve-api-key', {

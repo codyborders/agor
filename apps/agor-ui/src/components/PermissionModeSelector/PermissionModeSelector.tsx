@@ -19,7 +19,7 @@ interface ModeOption {
 export interface PermissionModeSelectorProps {
   value?: PermissionMode;
   onChange?: (value: PermissionMode) => void;
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'pi';
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
   /** Size for compact mode */
@@ -225,6 +225,8 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
       return OPENCODE_MODES;
     case 'copilot':
       return COPILOT_MODES;
+    case 'pi':
+      return CLAUDE_CODE_MODES;
     default:
       return CLAUDE_CODE_MODES;
   }
@@ -238,6 +240,8 @@ const getDefaultMode = (tool: PermissionModeSelectorProps['agentic_tool']): Perm
     case 'gemini':
     case 'opencode':
       return 'autoEdit';
+    case 'pi':
+      return 'acceptEdits';
     default:
       return 'acceptEdits';
   }

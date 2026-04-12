@@ -251,6 +251,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
     let permissionConfig = parent.permission_config;
     let modelConfig = parent.model_config;
+    let toolOptions = parent.tool_options;
 
     // If spawning a different tool and no explicit overrides, fetch user preferences
     if (!isSameTool && !data.permissionMode && !data.modelConfig) {
@@ -284,7 +285,12 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
                 updated_at: new Date().toISOString(),
                 thinkingMode: toolDefaults.modelConfig.thinkingMode,
                 manualThinkingTokens: toolDefaults.modelConfig.manualThinkingTokens,
+                provider: toolDefaults.modelConfig.provider,
               };
+            }
+
+            if (toolDefaults.toolOptions) {
+              toolOptions = toolDefaults.toolOptions;
             }
           }
         } catch (error) {
@@ -322,7 +328,12 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         updated_at: new Date().toISOString(),
         thinkingMode: data.modelConfig.thinkingMode,
         manualThinkingTokens: data.modelConfig.manualThinkingTokens,
+        provider: data.modelConfig.provider,
       };
+    }
+
+    if (data.toolOptions) {
+      toolOptions = data.toolOptions;
     }
 
     // Build callback configuration
@@ -370,6 +381,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         tasks: [],
         permission_config: permissionConfig,
         model_config: modelConfig,
+        tool_options: toolOptions,
         callback_config: callbackConfig,
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
       },

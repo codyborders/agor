@@ -1,5 +1,6 @@
 // src/types/worktree.ts
 import type { BoardID, UUID, WorktreeID } from './id';
+import type { PiToolOptions } from './pi';
 import type { WorktreeName } from './repo';
 
 /**
@@ -409,7 +410,7 @@ export interface WorktreeScheduleConfig {
   /**
    * Agent to use for scheduled sessions
    */
-  agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot';
+  agentic_tool: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'pi';
 
   /**
    * How many scheduled sessions to keep
@@ -435,6 +436,14 @@ export interface WorktreeScheduleConfig {
   model_config?: {
     mode: 'default' | 'custom';
     model?: string; // e.g., 'opus' for complex tasks
+    provider?: string;
+  };
+
+  /**
+   * Tool-specific options for scheduled sessions
+   */
+  tool_options?: {
+    pi?: PiToolOptions;
   };
 
   /**

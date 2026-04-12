@@ -7,6 +7,7 @@
 
 import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
 import type { SessionID, UserID, UUID, WorktreeID } from './id';
+import type { PiToolOptions } from './pi';
 import type { PermissionMode } from './session';
 import type { DefaultModelConfig } from './user';
 
@@ -59,6 +60,9 @@ export interface GatewayAgenticConfig {
   modelConfig?: DefaultModelConfig;
   permissionMode?: PermissionMode;
   mcpServerIds?: string[];
+  toolOptions?: {
+    pi?: PiToolOptions;
+  };
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
