@@ -537,6 +537,7 @@ export const worktrees = sqliteTable(
               compaction_mode?: 'inherit' | 'off' | 'auto' | 'manual';
               compaction_threshold_tokens?: number;
               raw_overrides?: Record<string, unknown>;
+              enable_skills?: boolean;
             };
           };
           mcp_server_ids?: string[]; // MCP servers to attach (default: ['agor'])

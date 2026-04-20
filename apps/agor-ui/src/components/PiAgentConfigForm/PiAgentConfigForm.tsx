@@ -11,7 +11,7 @@
 
 import type { MCPServer } from '@agor/core/types';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Form, Select, Tooltip, Typography } from 'antd';
+import { Form, Select, Switch, Tooltip, Typography } from 'antd';
 import { useMemo } from 'react';
 import { usePiRuntimeStatus } from '@/hooks/usePiRuntimeStatus';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -217,6 +217,21 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
             }))}
             allowClear
           />
+        </Form.Item>
+      )}
+
+      {!compact && (
+        <Form.Item
+          name={['toolOptions', 'pi', 'enable_skills']}
+          label="Enable skill auto-discovery"
+          valuePropName="checked"
+          help={
+            showHelpText
+              ? 'Inject the ~/.pi/agent/skills/ catalog (name + description of every skill) into the system prompt. Off by default — with many skills this can cost 10k+ tokens per send. Leave off for chatty local models; turn on for code-heavy sessions where you want the model to pick skills from the library.'
+              : undefined
+          }
+        >
+          <Switch />
         </Form.Item>
       )}
 
