@@ -99,8 +99,7 @@ export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
   {
     key: 'lm-studio',
     title: 'LM Studio',
-    description:
-      'LM Studio local server on port 1234. Declare one model per loaded checkpoint.',
+    description: 'LM Studio local server on port 1234. Declare one model per loaded checkpoint.',
     docsUrl: 'https://lmstudio.ai',
     draft: {
       id: 'lm-studio',
@@ -114,8 +113,7 @@ export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
   {
     key: 'vllm',
     title: 'vLLM',
-    description:
-      'Local vLLM server on port 8000. Declare one model per `--model` path you served.',
+    description: 'Local vLLM server on port 8000. Declare one model per `--model` path you served.',
     docsUrl: 'https://docs.vllm.ai',
     draft: {
       id: 'vllm',

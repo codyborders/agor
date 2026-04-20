@@ -5,111 +5,51 @@
  * custom providers defined in ~/.pi/agent/models.json) and lets the user paste
  * or clear an API key per provider. Writes go through the pi-auth service,
  * which persists to ~/.pi/agent/auth.json via Pi's AuthStorage.
+ *
+ * Built-in vs custom grouping, help URLs, and curated display labels all come
+ * from the daemon (enriched PiAuthProviderStatus). The UI has no hard-coded
+ * knowledge of pi-ai's catalog.
  */
 
 import type { AgorClient } from '@agor/core/api';
 import type { PiAuthProviderStatus } from '@agor/core/types';
-import {
-  CheckCircleFilled,
-  DeleteOutlined,
-  KeyOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Input,
-  Modal,
-  Popconfirm,
-  Space,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-  message,
-} from 'antd';
+import { CheckCircleFilled, DeleteOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Input, Modal, message, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 interface PiApiKeysTabProps {
   client: AgorClient | null;
 }
 
-interface ProviderRow extends PiAuthProviderStatus {
-  is_custom: boolean;
-  help_url?: string;
+const AUTH_TAG_COLORS: Record<PiAuthProviderStatus['auth_type'], string> = {
+  api_key: 'blue',
+  oauth: 'purple',
+  subscription: 'gold',
+};
+
+function formatProviderLabel(row: PiAuthProviderStatus): string {
+  return row.display_label ?? row.name;
 }
 
-// Providers baked into pi-ai's models.generated.js. Anything outside this
-// set is a custom provider defined in ~/.pi/agent/models.json.
-const BUILT_IN_PROVIDER_IDS = new Set([
-  'anthropic',
-  'openai',
-  'google',
-  'google-vertex',
-  'azure',
-  'bedrock',
-  'mistral',
-  'groq',
-  'cerebras',
-  'deepseek',
-  'xai',
-  'openrouter',
-  'vercel',
-  'together',
-  'fireworks',
-  'replicate',
-  'minimax',
-  'minimax-cn',
-  'zai',
-  'baseten',
-  'novita',
-  'qwen',
-]);
-
-// Where to get an API key for each known provider. Shown as a help link
-// next to the provider id; users can still configure unknown providers.
-const HELP_URLS: Record<string, string> = {
-  anthropic: 'https://console.anthropic.com/settings/keys',
-  openai: 'https://platform.openai.com/api-keys',
-  google: 'https://aistudio.google.com/app/apikey',
-  minimax: 'https://www.minimax.io/platform/user-center/basic-information/interface-key',
-  'minimax-cn': 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
-  zai: 'https://z.ai/manage-apikey/apikey-list',
-  mistral: 'https://console.mistral.ai/api-keys',
-  groq: 'https://console.groq.com/keys',
-  cerebras: 'https://cloud.cerebras.ai',
-  deepseek: 'https://platform.deepseek.com/api_keys',
-  xai: 'https://console.x.ai',
-  openrouter: 'https://openrouter.ai/keys',
-  together: 'https://api.together.xyz/settings/api-keys',
-  fireworks: 'https://fireworks.ai/account/api-keys',
-};
-
-// The auth service title-cases provider ids but the well-known brands have
-// their own capitalization conventions.
-const PROVIDER_LABEL_OVERRIDES: Record<string, string> = {
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  zai: 'Z.ai',
-  minimax: 'MiniMax',
-  'minimax-cn': 'MiniMax (China)',
-  xai: 'xAI',
-  openrouter: 'OpenRouter',
-};
-
-function formatProviderLabel(providerId: string, name: string): string {
-  return PROVIDER_LABEL_OVERRIDES[providerId] ?? name;
+function unwrapServiceList<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>)) {
+    const data = (result as { data?: unknown }).data;
+    if (Array.isArray(data)) return data as T[];
+  }
+  return [];
 }
 
 export const PiApiKeysTab: React.FC<PiApiKeysTabProps> = ({ client }) => {
   const [providers, setProviders] = useState<PiAuthProviderStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<ProviderRow | null>(null);
+  const [editing, setEditing] = useState<PiAuthProviderStatus | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [clearingId, setClearingId] = useState<string | null>(null);
+  const [clearTarget, setClearTarget] = useState<PiAuthProviderStatus | null>(null);
+  const [clearConfirmInput, setClearConfirmInput] = useState('');
 
   const fetchProviders = useCallback(async () => {
     if (!client) return;
@@ -117,13 +57,12 @@ export const PiApiKeysTab: React.FC<PiApiKeysTabProps> = ({ client }) => {
     setError(null);
     try {
       const result = await client.service('pi-auth').find({});
-      const list = Array.isArray(result)
-        ? (result as PiAuthProviderStatus[])
-        : // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service envelope shape varies
-          ((result as any).data ?? []);
-      setProviders(list);
+      setProviders(unwrapServiceList<PiAuthProviderStatus>(result));
     } catch (err) {
-      setError((err as Error)?.message ?? 'Failed to load Pi providers');
+      // Generic user-facing message; detailed error ends up in the console
+      // only, not in a toast that could leak paths/keys.
+      console.error('[pi-api-keys] Failed to load providers:', err);
+      setError('Failed to load Pi providers — check daemon logs for details.');
     } finally {
       setLoading(false);
     }
@@ -133,18 +72,14 @@ export const PiApiKeysTab: React.FC<PiApiKeysTabProps> = ({ client }) => {
     fetchProviders();
   }, [fetchProviders]);
 
-  const rows = useMemo<ProviderRow[]>(
-    () =>
-      providers.map((provider) => ({
-        ...provider,
-        is_custom: !BUILT_IN_PROVIDER_IDS.has(provider.provider_id),
-        help_url: HELP_URLS[provider.provider_id],
-      })),
+  const builtInRows = useMemo(
+    () => providers.filter((provider) => provider.is_built_in !== false),
     [providers]
   );
-
-  const builtInRows = useMemo(() => rows.filter((row) => !row.is_custom), [rows]);
-  const customRows = useMemo(() => rows.filter((row) => row.is_custom), [rows]);
+  const customRows = useMemo(
+    () => providers.filter((provider) => provider.is_built_in === false),
+    [providers]
+  );
 
   const handleSave = async () => {
     if (!client || !editing || !keyInput.trim()) return;
@@ -154,129 +89,131 @@ export const PiApiKeysTab: React.FC<PiApiKeysTabProps> = ({ client }) => {
         action: 'set_api_key',
         api_key: keyInput.trim(),
       });
-      message.success(`Saved API key for ${formatProviderLabel(editing.provider_id, editing.name)}`);
+      message.success(`Saved API key for ${formatProviderLabel(editing)}`);
       setEditing(null);
       setKeyInput('');
       await fetchProviders();
     } catch (err) {
-      message.error((err as Error)?.message ?? 'Failed to save API key');
+      console.error('[pi-api-keys] Failed to save API key:', err);
+      message.error('Failed to save API key — check daemon logs for details.');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleClear = async (row: ProviderRow) => {
-    if (!client) return;
-    setClearingId(row.provider_id);
+  const handleClearConfirm = async () => {
+    if (!client || !clearTarget) return;
+    if (clearConfirmInput.trim() !== clearTarget.provider_id) return;
+    setClearingId(clearTarget.provider_id);
     try {
-      await client.service('pi-auth').remove(row.provider_id, {
+      await client.service('pi-auth').remove(clearTarget.provider_id, {
         query: { action: 'logout' },
       });
-      message.success(`Cleared API key for ${formatProviderLabel(row.provider_id, row.name)}`);
+      message.success(`Cleared API key for ${formatProviderLabel(clearTarget)}`);
+      setClearTarget(null);
+      setClearConfirmInput('');
       await fetchProviders();
     } catch (err) {
-      message.error((err as Error)?.message ?? 'Failed to clear API key');
+      console.error('[pi-api-keys] Failed to clear API key:', err);
+      message.error('Failed to clear API key — check daemon logs for details.');
     } finally {
       setClearingId(null);
     }
   };
 
-  const columns = [
-    {
-      title: 'Provider',
-      dataIndex: 'provider_id',
-      key: 'provider_id',
-      render: (providerId: string, row: ProviderRow) => (
-        <Space orientation="vertical" size={0}>
-          <Typography.Text strong>{formatProviderLabel(providerId, row.name)}</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            <code>{providerId}</code>
-          </Typography.Text>
-        </Space>
-      ),
-    },
-    {
-      title: 'Auth',
-      dataIndex: 'auth_type',
-      key: 'auth_type',
-      width: 110,
-      render: (authType: PiAuthProviderStatus['auth_type']) => (
-        <Tag color={authType === 'oauth' ? 'purple' : authType === 'subscription' ? 'gold' : 'blue'}>
-          {authType === 'api_key' ? 'API key' : authType}
-        </Tag>
-      ),
-    },
-    {
-      title: 'Status',
-      dataIndex: 'configured',
-      key: 'configured',
-      width: 140,
-      render: (configured: boolean, row: ProviderRow) =>
-        configured ? (
-          <Space size={4}>
-            <CheckCircleFilled style={{ color: '#52c41a' }} />
-            <Typography.Text>Configured</Typography.Text>
+  const columns = useMemo(
+    () => [
+      {
+        title: 'Provider',
+        dataIndex: 'provider_id',
+        key: 'provider_id',
+        render: (providerId: string, row: PiAuthProviderStatus) => (
+          <Space orientation="vertical" size={0}>
+            <Typography.Text strong>{formatProviderLabel(row)}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              <code>{providerId}</code>
+            </Typography.Text>
           </Space>
-        ) : (
-          <Typography.Text type="secondary">
-            {row.auth_type === 'oauth' ? 'Not logged in' : 'No key set'}
-          </Typography.Text>
         ),
-    },
-    {
-      title: '',
-      key: 'actions',
-      width: 220,
-      render: (_: unknown, row: ProviderRow) => {
-        const oauthOnly = row.auth_type === 'oauth' && !row.configured;
-        return (
-          <Space>
-            <Tooltip
-              title={
-                oauthOnly
-                  ? 'This provider uses OAuth login only; set up via pi CLI.'
-                  : undefined
-              }
-            >
-              <Button
-                size="small"
-                icon={<KeyOutlined />}
-                onClick={() => {
-                  setEditing(row);
-                  setKeyInput('');
-                }}
-                disabled={oauthOnly}
+      },
+      {
+        title: 'Auth',
+        dataIndex: 'auth_type',
+        key: 'auth_type',
+        width: 110,
+        render: (authType: PiAuthProviderStatus['auth_type']) => (
+          <Tag color={AUTH_TAG_COLORS[authType]}>
+            {authType === 'api_key' ? 'API key' : authType}
+          </Tag>
+        ),
+      },
+      {
+        title: 'Status',
+        dataIndex: 'configured',
+        key: 'configured',
+        width: 140,
+        render: (configured: boolean, row: PiAuthProviderStatus) =>
+          configured ? (
+            <Space size={4}>
+              <CheckCircleFilled style={{ color: '#52c41a' }} />
+              <Typography.Text>Configured</Typography.Text>
+            </Space>
+          ) : (
+            <Typography.Text type="secondary">
+              {row.auth_type === 'oauth' ? 'Not logged in' : 'No key set'}
+            </Typography.Text>
+          ),
+      },
+      {
+        title: '',
+        key: 'actions',
+        width: 220,
+        render: (_: unknown, row: PiAuthProviderStatus) => {
+          const oauthOnly = row.auth_type === 'oauth' && !row.configured;
+          return (
+            <Space>
+              <Tooltip
+                title={
+                  oauthOnly ? 'This provider uses OAuth login only; set up via pi CLI.' : undefined
+                }
               >
-                {row.configured ? 'Replace key' : 'Set key'}
-              </Button>
-            </Tooltip>
-            {row.configured && (
-              <Popconfirm
-                title="Clear this API key?"
-                description="Pi sessions using this provider will stop working until a new key is set."
-                okText="Clear"
-                okType="danger"
-                onConfirm={() => handleClear(row)}
-              >
+                <Button
+                  size="small"
+                  icon={<KeyOutlined />}
+                  onClick={() => {
+                    setEditing(row);
+                    setKeyInput('');
+                  }}
+                  disabled={oauthOnly}
+                >
+                  {row.configured ? 'Replace key' : 'Set key'}
+                </Button>
+              </Tooltip>
+              {row.configured && (
                 <Button
                   size="small"
                   type="text"
                   danger
                   icon={<DeleteOutlined />}
                   loading={clearingId === row.provider_id}
+                  onClick={() => {
+                    setClearTarget(row);
+                    setClearConfirmInput('');
+                  }}
                 />
-              </Popconfirm>
-            )}
-            {row.help_url && (
-              <Typography.Link href={row.help_url} target="_blank" rel="noopener noreferrer">
-                Get key
-              </Typography.Link>
-            )}
-          </Space>
-        );
+              )}
+              {row.help_url && (
+                <Typography.Link href={row.help_url} target="_blank" rel="noopener noreferrer">
+                  Get key
+                </Typography.Link>
+              )}
+            </Space>
+          );
+        },
       },
-    },
-  ];
+    ],
+    [clearingId]
+  );
 
   return (
     <div>
@@ -340,8 +277,7 @@ export const PiApiKeysTab: React.FC<PiApiKeysTabProps> = ({ client }) => {
             <Space>
               <KeyOutlined />
               {`${editing.configured ? 'Replace' : 'Set'} API key · ${formatProviderLabel(
-                editing.provider_id,
-                editing.name
+                editing
               )}`}
             </Space>
           ) : null
@@ -369,10 +305,48 @@ export const PiApiKeysTab: React.FC<PiApiKeysTabProps> = ({ client }) => {
         {editing?.help_url && (
           <Typography.Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
             <Typography.Link href={editing.help_url} target="_blank" rel="noopener noreferrer">
-              Get an API key from {formatProviderLabel(editing.provider_id, editing.name)}
+              Get an API key from {formatProviderLabel(editing)}
             </Typography.Link>
           </Typography.Paragraph>
         )}
+      </Modal>
+
+      <Modal
+        title={
+          clearTarget ? (
+            <Space>
+              <DeleteOutlined />
+              {`Clear API key · ${formatProviderLabel(clearTarget)}`}
+            </Space>
+          ) : null
+        }
+        open={!!clearTarget}
+        onOk={handleClearConfirm}
+        okText="Clear key"
+        okButtonProps={{
+          danger: true,
+          disabled:
+            !clearTarget ||
+            clearConfirmInput.trim() !== clearTarget.provider_id ||
+            clearingId === clearTarget.provider_id,
+          loading: clearingId === clearTarget?.provider_id,
+        }}
+        onCancel={() => {
+          setClearTarget(null);
+          setClearConfirmInput('');
+        }}
+      >
+        <Typography.Paragraph>
+          Pi sessions using this provider will stop working until a new key is set. To confirm, type
+          the provider id <code>{clearTarget?.provider_id}</code> below.
+        </Typography.Paragraph>
+        <Input
+          placeholder={clearTarget?.provider_id ?? ''}
+          value={clearConfirmInput}
+          onChange={(event) => setClearConfirmInput(event.target.value)}
+          onPressEnter={handleClearConfirm}
+          autoFocus
+        />
       </Modal>
     </div>
   );

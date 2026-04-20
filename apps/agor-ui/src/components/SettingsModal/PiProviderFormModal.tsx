@@ -6,14 +6,11 @@
  * form directly. Supports nested model management via PiModelFormModal.
  */
 
+import { DeleteOutlined, EditOutlined, MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import {
-  DeleteOutlined,
-  EditOutlined,
-  MinusCircleOutlined,
-  PlusOutlined,
-} from '@ant-design/icons';
-import {
+  Alert,
   Button,
+  Checkbox,
   Divider,
   Form,
   Input,
@@ -26,7 +23,13 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  compatFromFormValues,
+  compatToFormValues,
+  PiCompatFlagsFields,
+  type PiCompatFormValues,
+} from './PiCompatFlagsFields';
 import { PiModelFormModal } from './PiModelFormModal';
 import type { PiModelDraft, PiProviderApi, PiProviderDraft } from './piProviderPresets';
 
@@ -43,23 +46,54 @@ interface HeaderRow {
   value: string;
 }
 
-interface FormValues {
+interface FormValues extends PiCompatFormValues {
   id: string;
   baseUrl?: string;
   api?: PiProviderApi;
   apiKey?: string;
   authHeader?: boolean;
   headers?: HeaderRow[];
-  compat_supportsDeveloperRole?: boolean;
-  compat_supportsReasoningEffort?: boolean;
-  compat_supportsUsageInStreaming?: boolean;
-  compat_maxTokensField?: 'max_tokens' | 'max_completion_tokens';
-  compat_thinkingFormat?: 'openai' | 'zai' | 'qwen' | 'qwen-chat-template';
+  /** User acknowledgement that apiKey / a header value will be executed as a shell command. */
+  shellCommandAck?: boolean;
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+// RFC 7230 token grammar for HTTP header field names.
+const HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/;
+
+function describeBaseUrl(raw: string | undefined): {
+  valid: boolean;
+  insecure: boolean;
+  reason?: string;
+} {
+  if (!raw || !raw.trim()) {
+    return { valid: false, insecure: false, reason: 'Base URL is required' };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    return { valid: false, insecure: false, reason: 'Enter a valid URL (e.g. https://host/v1)' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return {
+      valid: false,
+      insecure: false,
+      reason: `Only http:// and https:// are supported (got ${parsed.protocol})`,
+    };
+  }
+  const insecure =
+    parsed.protocol === 'http:' && !LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase());
+  return { valid: true, insecure };
+}
+
+function isShellCommand(value: string | undefined): boolean {
+  return typeof value === 'string' && value.trim().startsWith('!');
 }
 
 function toFormValues(draft: PiProviderDraft | undefined): FormValues {
   if (!draft) {
-    return { api: 'openai-completions' };
+    return { id: '', api: 'openai-completions', shellCommandAck: false };
   }
   const headers = draft.headers
     ? Object.entries(draft.headers).map(([key, value]) => ({ key, value }))
@@ -68,33 +102,27 @@ function toFormValues(draft: PiProviderDraft | undefined): FormValues {
     id: draft.id,
     baseUrl: draft.baseUrl,
     api: draft.api ?? 'openai-completions',
-    apiKey: draft.apiKey,
+    // apiKey is intentionally never re-populated when editing: the daemon
+    // should mask it server-side, and we don't want the cleartext key to
+    // appear in the React tree, in DevTools, or in a screenshot. Users must
+    // re-enter the key to change it.
+    apiKey: undefined,
     authHeader: draft.authHeader,
     headers,
-    compat_supportsDeveloperRole: draft.compat?.supportsDeveloperRole,
-    compat_supportsReasoningEffort: draft.compat?.supportsReasoningEffort,
-    compat_supportsUsageInStreaming: draft.compat?.supportsUsageInStreaming,
-    compat_maxTokensField: draft.compat?.maxTokensField,
-    compat_thinkingFormat: draft.compat?.thinkingFormat,
+    shellCommandAck: false,
+    ...compatToFormValues(draft.compat),
   };
 }
 
 function fromFormValues(values: FormValues, models: PiModelDraft[]): PiProviderDraft {
   const headers: Record<string, string> = {};
   for (const row of values.headers ?? []) {
-    if (row?.key?.trim()) {
-      headers[row.key.trim()] = row.value ?? '';
+    const name = row?.key?.trim();
+    if (name) {
+      // Strip any stray CR/LF to prevent header injection downstream.
+      headers[name] = (row.value ?? '').replace(/[\r\n]+/g, ' ');
     }
   }
-
-  const compat = {
-    supportsDeveloperRole: values.compat_supportsDeveloperRole,
-    supportsReasoningEffort: values.compat_supportsReasoningEffort,
-    supportsUsageInStreaming: values.compat_supportsUsageInStreaming,
-    maxTokensField: values.compat_maxTokensField,
-    thinkingFormat: values.compat_thinkingFormat,
-  };
-  const compatHasValue = Object.values(compat).some((value) => value !== undefined);
 
   return {
     id: values.id.trim(),
@@ -103,7 +131,7 @@ function fromFormValues(values: FormValues, models: PiModelDraft[]): PiProviderD
     apiKey: values.apiKey?.trim() || undefined,
     authHeader: values.authHeader || undefined,
     headers: Object.keys(headers).length > 0 ? headers : undefined,
-    compat: compatHasValue ? compat : undefined,
+    compat: compatFromFormValues(values),
     models,
   };
 }
@@ -122,6 +150,13 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
   );
   const isEditing = Boolean(initial);
 
+  // Watch fields that drive cross-field warnings so the UI updates live.
+  const baseUrlValue = Form.useWatch('baseUrl', form);
+  const apiKeyValue = Form.useWatch('apiKey', form);
+  const authHeaderValue = Form.useWatch('authHeader', form);
+  const headersValue = Form.useWatch('headers', form) as HeaderRow[] | undefined;
+  const shellCommandAckValue = Form.useWatch('shellCommandAck', form);
+
   useEffect(() => {
     if (open) {
       form.resetFields();
@@ -131,8 +166,7 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
   }, [open, initial, form]);
 
   const handleAddModel = () => setEditingModel({ index: -1 });
-  const handleEditModel = (index: number) =>
-    setEditingModel({ index, model: models[index] });
+  const handleEditModel = (index: number) => setEditingModel({ index, model: models[index] });
   const handleRemoveModel = (index: number) => {
     setModels((previous) => previous.filter((_, position) => position !== index));
   };
@@ -155,9 +189,18 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
     onSubmit(fromFormValues(values, models));
   };
 
-  const reservedExceptSelf = initial
-    ? reservedIds.filter((id) => id !== initial.id)
-    : reservedIds;
+  const reservedExceptSelf = useMemo(
+    () => reservedIds.filter((id) => id !== initial?.id),
+    [reservedIds, initial?.id]
+  );
+
+  const baseUrlInfo = describeBaseUrl(baseUrlValue);
+  const hasShellKey = isShellCommand(apiKeyValue);
+  const hasShellHeader = (headersValue ?? []).some((row) => isShellCommand(row?.value));
+  const requiresShellAck = hasShellKey || hasShellHeader;
+  const bearerOverHttp = authHeaderValue && baseUrlInfo.insecure;
+
+  const modelIds = useMemo(() => models.map((model) => model.id), [models]);
 
   return (
     <>
@@ -167,6 +210,9 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
         onOk={handleOk}
         onCancel={onCancel}
         okText={isEditing ? 'Save' : 'Add provider'}
+        okButtonProps={{
+          disabled: requiresShellAck && !shellCommandAckValue,
+        }}
         width={760}
         destroyOnHidden
       >
@@ -186,9 +232,7 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
                 {
                   validator: (_rule, value) => {
                     if (typeof value === 'string' && reservedExceptSelf.includes(value.trim())) {
-                      return Promise.reject(
-                        new Error(`Provider id "${value}" already exists`)
-                      );
+                      return Promise.reject(new Error(`Provider id "${value}" already exists`));
                     }
                     return Promise.resolve();
                   },
@@ -212,10 +256,29 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
           <Form.Item
             label="Base URL"
             name="baseUrl"
-            rules={[{ required: true, message: 'Base URL is required' }]}
+            rules={[
+              { required: true, message: 'Base URL is required' },
+              {
+                validator: (_rule, value) => {
+                  const result = describeBaseUrl(typeof value === 'string' ? value : undefined);
+                  return result.valid
+                    ? Promise.resolve()
+                    : Promise.reject(new Error(result.reason));
+                },
+              },
+            ]}
           >
             <Input placeholder="https://api.example.com/v1 or http://localhost:8080/v1" />
           </Form.Item>
+          {baseUrlInfo.insecure && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="Base URL uses plain HTTP to a non-loopback host"
+              description="Traffic (including any API key sent as a bearer) will be unencrypted. Prefer https:// unless this is a local network host you explicitly trust."
+            />
+          )}
 
           <Form.Item
             label="API key"
@@ -224,16 +287,33 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 Literal value, env var name (e.g. <code>MY_API_KEY</code>), or shell command
                 prefixed with <code>!</code>. Local servers like llama.cpp usually accept any
-                placeholder.
+                placeholder. {isEditing && 'Leave blank to keep the currently stored key.'}
               </Typography.Text>
             }
           >
-            <Input placeholder="sk-... or MY_API_KEY or !op read 'op://vault/item/credential'" />
+            <Input.Password
+              placeholder={
+                isEditing
+                  ? 'Leave blank to keep current key'
+                  : "sk-... or MY_API_KEY or !op read 'op://vault/item/credential'"
+              }
+              autoComplete="new-password"
+              visibilityToggle
+            />
           </Form.Item>
 
           <Form.Item label="Auth header" name="authHeader" valuePropName="checked">
             <Switch checkedChildren="Authorization: Bearer" unCheckedChildren="Off" />
           </Form.Item>
+          {bearerOverHttp && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="Bearer token over cleartext HTTP"
+              description="You're about to send Authorization headers over http:// to a non-loopback host. Anyone on the network path can read the key."
+            />
+          )}
 
           <Divider orientation="left" plain>
             Custom headers
@@ -247,6 +327,20 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
                       {...rest}
                       name={[name, 'key']}
                       style={{ width: 240, marginBottom: 0 }}
+                      rules={[
+                        {
+                          validator: (_rule, value) => {
+                            if (!value || !String(value).trim()) return Promise.resolve();
+                            return HEADER_NAME_PATTERN.test(String(value).trim())
+                              ? Promise.resolve()
+                              : Promise.reject(
+                                  new Error(
+                                    "Header name must match the HTTP token grammar (letters, digits, !#$%&'*+-.^_`|~)"
+                                  )
+                                );
+                          },
+                        },
+                      ]}
                     >
                       <Input placeholder="Header-Name" />
                     </Form.Item>
@@ -254,6 +348,18 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
                       {...rest}
                       name={[name, 'value']}
                       style={{ width: 360, marginBottom: 0 }}
+                      rules={[
+                        {
+                          validator: (_rule, value) => {
+                            if (typeof value === 'string' && /[\r\n]/.test(value)) {
+                              return Promise.reject(
+                                new Error('Header value cannot contain newlines')
+                              );
+                            }
+                            return Promise.resolve();
+                          },
+                        },
+                      ]}
                     >
                       <Input placeholder="literal / env var / !shell" />
                     </Form.Item>
@@ -272,6 +378,34 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
             )}
           </Form.List>
 
+          {requiresShellAck && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginTop: 12, marginBottom: 12 }}
+              message="This provider will execute a shell command"
+              description={
+                <>
+                  <Typography.Paragraph style={{ marginBottom: 8 }}>
+                    Values prefixed with <code>!</code> are run as shell commands on the daemon host
+                    each time Pi resolves the provider. Only save this if you authored the command
+                    and understand what it does — a wrong value can run arbitrary code under the
+                    daemon's OS identity.
+                  </Typography.Paragraph>
+                  <Form.Item
+                    name="shellCommandAck"
+                    valuePropName="checked"
+                    style={{ marginBottom: 0 }}
+                  >
+                    <Checkbox>
+                      I understand this will execute shell commands on the daemon host.
+                    </Checkbox>
+                  </Form.Item>
+                </>
+              }
+            />
+          )}
+
           <Divider orientation="left" plain>
             Compat flags
           </Divider>
@@ -280,59 +414,7 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
             Local llama.cpp/Ollama/LM Studio/vLLM typically need developer role off, reasoning
             effort off, and usage-in-streaming off.
           </Typography.Paragraph>
-          <Space size="large" wrap align="start">
-            <Form.Item
-              label="Supports developer role"
-              name="compat_supportsDeveloperRole"
-              valuePropName="checked"
-            >
-              <Switch />
-            </Form.Item>
-            <Form.Item
-              label="Supports reasoning_effort"
-              name="compat_supportsReasoningEffort"
-              valuePropName="checked"
-            >
-              <Switch />
-            </Form.Item>
-            <Form.Item
-              label="Usage in streaming"
-              name="compat_supportsUsageInStreaming"
-              valuePropName="checked"
-            >
-              <Switch />
-            </Form.Item>
-            <Form.Item
-              label="Max tokens field"
-              name="compat_maxTokensField"
-              style={{ width: 220 }}
-            >
-              <Select
-                allowClear
-                options={[
-                  { value: 'max_tokens', label: 'max_tokens' },
-                  { value: 'max_completion_tokens', label: 'max_completion_tokens' },
-                ]}
-                placeholder="Inherit"
-              />
-            </Form.Item>
-            <Form.Item
-              label="Thinking format"
-              name="compat_thinkingFormat"
-              style={{ width: 220 }}
-            >
-              <Select
-                allowClear
-                options={[
-                  { value: 'openai', label: 'openai (reasoning_effort)' },
-                  { value: 'zai', label: 'zai' },
-                  { value: 'qwen', label: 'qwen (enable_thinking)' },
-                  { value: 'qwen-chat-template', label: 'qwen-chat-template' },
-                ]}
-                placeholder="Inherit"
-              />
-            </Form.Item>
-          </Space>
+          <PiCompatFlagsFields />
 
           <Divider orientation="left" plain>
             Models
@@ -343,7 +425,8 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
             size="small"
             pagination={false}
             locale={{
-              emptyText: 'No models yet. Add at least one so Pi knows what to call on this provider.',
+              emptyText:
+                'No models yet. Add at least one so Pi knows what to call on this provider.',
             }}
             columns={[
               {
@@ -421,7 +504,7 @@ export const PiProviderFormModal: React.FC<PiProviderFormModalProps> = ({
       <PiModelFormModal
         open={editingModel !== null}
         initial={editingModel?.model}
-        existingIds={models.map((model) => model.id)}
+        existingIds={modelIds}
         onCancel={() => setEditingModel(null)}
         onSubmit={handleModelSubmit}
       />

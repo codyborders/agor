@@ -11,22 +11,19 @@
  */
 
 import type { AgorClient } from '@agor/core/api';
-import {
-  DeleteOutlined,
-  EditOutlined,
-  PlusOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons';
+import type { PiFileDocument } from '@agor/core/types';
+import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
   Dropdown,
-  Popconfirm,
+  Input,
+  Modal,
+  message,
   Space,
   Table,
   Tag,
   Typography,
-  message,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PiProviderFormModal } from './PiProviderFormModal';
@@ -52,27 +49,26 @@ export const PiCustomProvidersTab: React.FC<PiCustomProvidersTabProps> = ({ clie
   const [error, setError] = useState<string | null>(null);
   const [filePath, setFilePath] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | undefined>();
-  const [editing, setEditing] = useState<{ mode: 'add' | 'edit'; draft?: PiProviderDraft } | null>(
-    null
-  );
+  const [editing, setEditing] = useState<{
+    mode: 'add' | 'edit';
+    draft: PiProviderDraft;
+  } | null>(null);
+  const [removalTarget, setRemovalTarget] = useState<string | null>(null);
+  const [removalConfirmInput, setRemovalConfirmInput] = useState('');
+  const [removing, setRemoving] = useState(false);
 
   const fetchDocument = useCallback(async () => {
     if (!client) return;
     setLoading(true);
     setError(null);
     try {
-      const result = (await client.service('pi-files').get('models')) as {
-        data?: ModelsDocument;
-        raw?: string;
-        parsed: boolean;
-        parse_error?: string;
-        file_path: string;
-      };
+      const result = (await client.service('pi-files').get('models')) as PiFileDocument;
       setFilePath(result.file_path);
       setParseError(result.parse_error);
-      setDoc(result.parsed ? result.data ?? {} : {});
+      setDoc(result.parsed ? ((result.data as ModelsDocument | undefined) ?? {}) : {});
     } catch (err) {
-      setError((err as Error)?.message ?? 'Failed to load models.json');
+      console.error('[pi-custom-providers] Failed to load models.json:', err);
+      setError('Failed to load models.json — check daemon logs for details.');
     } finally {
       setLoading(false);
     }
@@ -82,13 +78,18 @@ export const PiCustomProvidersTab: React.FC<PiCustomProvidersTabProps> = ({ clie
     fetchDocument();
   }, [fetchDocument]);
 
+  // Map of stored providers keyed by id. Keeping the id out of the stored
+  // draft means the UI never round-trips it and can't accidentally persist
+  // two ids that disagree with the object key.
   const providers = useMemo<Array<{ id: string; draft: PiProviderDraft }>>(() => {
     const entries = doc?.providers ?? {};
-    return Object.entries(entries).map(([id, draft]) => ({
+    return Object.entries(entries).map(([id, stored]) => ({
       id,
-      draft: { ...draft, id },
+      draft: { ...stored, id },
     }));
   }, [doc]);
+
+  const reservedIds = useMemo(() => providers.map((provider) => provider.id), [providers]);
 
   const saveDocument = async (nextDoc: ModelsDocument) => {
     if (!client) return;
@@ -101,7 +102,8 @@ export const PiCustomProvidersTab: React.FC<PiCustomProvidersTabProps> = ({ clie
       setDoc(nextDoc);
       message.success('Saved ~/.pi/agent/models.json');
     } catch (err) {
-      message.error((err as Error)?.message ?? 'Failed to save models.json');
+      console.error('[pi-custom-providers] Failed to save models.json:', err);
+      message.error('Failed to save models.json — check daemon logs for details.');
       throw err;
     } finally {
       setSaving(false);
@@ -109,30 +111,40 @@ export const PiCustomProvidersTab: React.FC<PiCustomProvidersTabProps> = ({ clie
   };
 
   const handleSubmit = async (draft: PiProviderDraft) => {
-    const nextProviders = { ...(doc?.providers ?? {}) };
-    // Strip the id from the stored entry — it's already the key.
     const { id, ...storedDraft } = draft;
+    if (!id) {
+      message.error('Provider id is required');
+      return;
+    }
+    const nextProviders = { ...(doc?.providers ?? {}) };
     nextProviders[id] = storedDraft;
     try {
       await saveDocument({ ...(doc ?? {}), providers: nextProviders });
       setEditing(null);
     } catch {
-      // message shown in saveDocument
+      // toast shown inside saveDocument
     }
   };
 
-  const handleRemove = async (providerId: string) => {
+  const handleRemoveConfirm = async () => {
+    if (!removalTarget) return;
+    if (removalConfirmInput.trim() !== removalTarget) return;
     const nextProviders = { ...(doc?.providers ?? {}) };
-    delete nextProviders[providerId];
+    delete nextProviders[removalTarget];
+    setRemoving(true);
     try {
       await saveDocument({ ...(doc ?? {}), providers: nextProviders });
+      setRemovalTarget(null);
+      setRemovalConfirmInput('');
     } catch {
-      // message shown in saveDocument
+      // toast shown inside saveDocument
+    } finally {
+      setRemoving(false);
     }
   };
 
   const handleAddPreset = (preset: PiProviderPreset) => {
-    const existingIds = new Set(providers.map((provider) => provider.id));
+    const existingIds = new Set(reservedIds);
     let candidate = preset.draft.id || preset.key;
     let suffix = 2;
     while (candidate && existingIds.has(candidate)) {
@@ -207,21 +219,20 @@ export const PiCustomProvidersTab: React.FC<PiCustomProvidersTabProps> = ({ clie
             icon={<EditOutlined />}
             onClick={() => setEditing({ mode: 'edit', draft: row.draft })}
           />
-          <Popconfirm
-            title={`Remove provider "${row.id}"?`}
-            description="Pi sessions using this provider will stop working until another provider supplies the model."
-            okText="Remove"
-            okType="danger"
-            onConfirm={() => handleRemove(row.id)}
-          >
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          <Button
+            type="text"
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => {
+              setRemovalTarget(row.id);
+              setRemovalConfirmInput('');
+            }}
+          />
         </Space>
       ),
     },
   ];
-
-  const reservedIds = providers.map((provider) => provider.id);
 
   return (
     <div>
@@ -259,7 +270,12 @@ export const PiCustomProvidersTab: React.FC<PiCustomProvidersTabProps> = ({ clie
         </Dropdown>
         <Button
           icon={<PlusOutlined />}
-          onClick={() => setEditing({ mode: 'add', draft: { id: '', api: 'openai-completions' } })}
+          onClick={() =>
+            setEditing({
+              mode: 'add',
+              draft: { id: '', api: 'openai-completions' },
+            })
+          }
         >
           Blank provider
         </Button>
@@ -287,6 +303,34 @@ export const PiCustomProvidersTab: React.FC<PiCustomProvidersTabProps> = ({ clie
           onSubmit={handleSubmit}
         />
       )}
+
+      <Modal
+        title={removalTarget ? `Remove provider · ${removalTarget}` : null}
+        open={!!removalTarget}
+        onOk={handleRemoveConfirm}
+        okText="Remove"
+        okButtonProps={{
+          danger: true,
+          disabled: !removalTarget || removalConfirmInput.trim() !== removalTarget || removing,
+          loading: removing,
+        }}
+        onCancel={() => {
+          setRemovalTarget(null);
+          setRemovalConfirmInput('');
+        }}
+      >
+        <Typography.Paragraph>
+          Pi sessions using this provider will stop working until another provider supplies the
+          model. To confirm, type the provider id <code>{removalTarget}</code> below.
+        </Typography.Paragraph>
+        <Input
+          placeholder={removalTarget ?? ''}
+          value={removalConfirmInput}
+          onChange={(event) => setRemovalConfirmInput(event.target.value)}
+          onPressEnter={handleRemoveConfirm}
+          autoFocus
+        />
+      </Modal>
     </div>
   );
 };

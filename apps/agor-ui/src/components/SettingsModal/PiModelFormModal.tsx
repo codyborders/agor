@@ -8,6 +8,12 @@
 
 import { Form, Input, InputNumber, Modal, Select, Space, Switch, Typography } from 'antd';
 import { useEffect } from 'react';
+import {
+  compatFromFormValues,
+  compatToFormValues,
+  PiCompatFlagsFields,
+  type PiCompatFormValues,
+} from './PiCompatFlagsFields';
 import type { PiModelDraft } from './piProviderPresets';
 
 interface PiModelFormModalProps {
@@ -18,7 +24,7 @@ interface PiModelFormModalProps {
   existingIds: string[];
 }
 
-interface FormValues {
+interface FormValues extends PiCompatFormValues {
   id: string;
   name?: string;
   reasoning?: boolean;
@@ -29,16 +35,11 @@ interface FormValues {
   cost_output?: number;
   cost_cacheRead?: number;
   cost_cacheWrite?: number;
-  compat_supportsDeveloperRole?: boolean;
-  compat_supportsReasoningEffort?: boolean;
-  compat_supportsUsageInStreaming?: boolean;
-  compat_maxTokensField?: 'max_tokens' | 'max_completion_tokens';
-  compat_thinkingFormat?: 'openai' | 'zai' | 'qwen' | 'qwen-chat-template';
 }
 
 function toFormValues(model: PiModelDraft | undefined): FormValues {
   if (!model) {
-    return { input: ['text'], reasoning: false };
+    return { id: '', input: ['text'], reasoning: false };
   }
   return {
     id: model.id,
@@ -51,11 +52,7 @@ function toFormValues(model: PiModelDraft | undefined): FormValues {
     cost_output: model.cost?.output,
     cost_cacheRead: model.cost?.cacheRead,
     cost_cacheWrite: model.cost?.cacheWrite,
-    compat_supportsDeveloperRole: model.compat?.supportsDeveloperRole,
-    compat_supportsReasoningEffort: model.compat?.supportsReasoningEffort,
-    compat_supportsUsageInStreaming: model.compat?.supportsUsageInStreaming,
-    compat_maxTokensField: model.compat?.maxTokensField,
-    compat_thinkingFormat: model.compat?.thinkingFormat,
+    ...compatToFormValues(model.compat),
   };
 }
 
@@ -73,15 +70,6 @@ function fromFormValues(values: FormValues): PiModelDraft {
         }
       : undefined;
 
-  const compat = {
-    supportsDeveloperRole: values.compat_supportsDeveloperRole,
-    supportsReasoningEffort: values.compat_supportsReasoningEffort,
-    supportsUsageInStreaming: values.compat_supportsUsageInStreaming,
-    maxTokensField: values.compat_maxTokensField,
-    thinkingFormat: values.compat_thinkingFormat,
-  };
-  const compatHasValue = Object.values(compat).some((value) => value !== undefined);
-
   return {
     id: values.id.trim(),
     name: values.name?.trim() || undefined,
@@ -90,7 +78,7 @@ function fromFormValues(values: FormValues): PiModelDraft {
     contextWindow: values.contextWindow,
     maxTokens: values.maxTokens,
     cost,
-    compat: compatHasValue ? compat : undefined,
+    compat: compatFromFormValues(values),
   };
 }
 
@@ -162,11 +150,7 @@ export const PiModelFormModal: React.FC<PiModelFormModalProps> = ({
           >
             <InputNumber min={0} step={1000} style={{ width: '100%' }} placeholder="128000" />
           </Form.Item>
-          <Form.Item
-            label="Max output tokens"
-            name="maxTokens"
-            style={{ width: 220 }}
-          >
+          <Form.Item label="Max output tokens" name="maxTokens" style={{ width: 220 }}>
             <InputNumber min={0} step={1000} style={{ width: '100%' }} placeholder="16384" />
           </Form.Item>
           <Form.Item label="Reasoning" name="reasoning" valuePropName="checked">
@@ -206,51 +190,7 @@ export const PiModelFormModal: React.FC<PiModelFormModalProps> = ({
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           Leave blank to inherit the provider's compat settings.
         </Typography.Paragraph>
-        <Space size="large" wrap align="start">
-          <Form.Item
-            label="Supports developer role"
-            name="compat_supportsDeveloperRole"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            label="Supports reasoning_effort"
-            name="compat_supportsReasoningEffort"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            label="Usage in streaming"
-            name="compat_supportsUsageInStreaming"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item label="Max tokens field" name="compat_maxTokensField" style={{ width: 220 }}>
-            <Select
-              allowClear
-              options={[
-                { value: 'max_tokens', label: 'max_tokens' },
-                { value: 'max_completion_tokens', label: 'max_completion_tokens' },
-              ]}
-              placeholder="Inherit"
-            />
-          </Form.Item>
-          <Form.Item label="Thinking format" name="compat_thinkingFormat" style={{ width: 220 }}>
-            <Select
-              allowClear
-              options={[
-                { value: 'openai', label: 'openai (reasoning_effort)' },
-                { value: 'zai', label: 'zai' },
-                { value: 'qwen', label: 'qwen (enable_thinking)' },
-                { value: 'qwen-chat-template', label: 'qwen-chat-template' },
-              ]}
-              placeholder="Inherit"
-            />
-          </Form.Item>
-        </Space>
+        <PiCompatFlagsFields />
       </Form>
     </Modal>
   );

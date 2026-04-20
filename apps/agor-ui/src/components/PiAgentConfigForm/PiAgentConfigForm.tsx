@@ -11,7 +11,7 @@
 
 import type { MCPServer } from '@agor/core/types';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { AutoComplete, Form, Select, Tooltip, Typography } from 'antd';
+import { Form, Select, Tooltip, Typography } from 'antd';
 import { useMemo } from 'react';
 import { usePiRuntimeStatus } from '@/hooks/usePiRuntimeStatus';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -50,31 +50,34 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
 }) => {
   const { status, loading } = usePiRuntimeStatus();
   const form = Form.useFormInstance();
-  const selectedProvider = Form.useWatch(['modelConfig', 'provider'], form) as
-    | string
-    | undefined;
+  const selectedProvider = Form.useWatch(['modelConfig', 'provider'], form) as string | undefined;
+
+  // Memoize on the pairs array identity (stable across renders unless the
+  // hook refreshes) instead of the outer `status` object — which the hook
+  // can reallocate even when the underlying data is unchanged.
+  const pairs = status?.provider_model_pairs;
 
   const { providerOptions, modelOptionsByProvider, allModelOptions } = useMemo(() => {
-    const pairs = status?.provider_model_pairs ?? [];
+    const list = pairs ?? [];
     const providerMeta = new Map<string, { configured: boolean; modelCount: number }>();
     const modelsByProvider = new Map<string, Array<{ value: string; label: string }>>();
 
-    for (const pair of pairs) {
+    for (const pair of list) {
       const meta = providerMeta.get(pair.provider) ?? { configured: false, modelCount: 0 };
       meta.modelCount += 1;
       meta.configured = meta.configured || pair.has_configured_auth;
       providerMeta.set(pair.provider, meta);
 
-      const list = modelsByProvider.get(pair.provider) ?? [];
+      const modelList = modelsByProvider.get(pair.provider) ?? [];
       const contextLabel = pair.context_window
         ? ` · ${Math.round(pair.context_window / 1000)}k ctx`
         : '';
       const reasoningLabel = pair.reasoning ? ' · reasoning' : '';
-      list.push({
+      modelList.push({
         value: pair.id,
         label: `${pair.name}${contextLabel}${reasoningLabel}`,
       });
-      modelsByProvider.set(pair.provider, list);
+      modelsByProvider.set(pair.provider, modelList);
     }
 
     const providers = Array.from(providerMeta.entries())
@@ -86,7 +89,7 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
       }))
       .sort((first, second) => first.value.localeCompare(second.value));
 
-    const allModels = pairs
+    const allModels = list
       .map((pair) => ({
         value: pair.id,
         label: `${pair.provider} / ${pair.name}`,
@@ -98,7 +101,7 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
       modelOptionsByProvider: modelsByProvider,
       allModelOptions: allModels,
     };
-  }, [status]);
+  }, [pairs]);
 
   const modelOptions = useMemo(() => {
     return (selectedProvider && modelOptionsByProvider.get(selectedProvider)) || allModelOptions;
@@ -115,7 +118,9 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
 
   return (
     <>
-      <Form.Item name={['modelConfig', 'mode']} hidden>
+      {/* Pi always uses exact provider+model ids; `mode` is stored for parity
+          with the claude-code/codex/gemini model config shape. */}
+      <Form.Item name={['modelConfig', 'mode']} hidden initialValue="exact">
         <input type="hidden" />
       </Form.Item>
 
@@ -127,8 +132,8 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
             <Tooltip
               title={
                 <span>
-                  Pi ships with built-in providers (anthropic, openai, google, minimax, zai, …).
-                  Add more in <b>User Settings → Pi Custom Providers</b> and paste keys in{' '}
+                  Pi ships with built-in providers (anthropic, openai, google, minimax, zai, …). Add
+                  more in <b>User Settings → Pi Custom Providers</b> and paste keys in{' '}
                   <b>Pi API Keys</b>.
                 </span>
               }
@@ -143,24 +148,28 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
             : undefined
         }
       >
-        <AutoComplete
+        <Select
+          showSearch
+          virtual
           placeholder="e.g. anthropic, minimax, zai, llama-cpp"
           options={providerOptions}
           allowClear
-          filterOption
+          optionFilterProp="label"
         />
       </Form.Item>
 
       <Form.Item name={['modelConfig', 'model']} label="Model" help={modelHelp}>
-        <AutoComplete
+        <Select
+          showSearch
+          virtual
           placeholder="e.g. glm-5.1, MiniMax-M2.7, claude-sonnet-4-6"
           options={modelOptions}
           allowClear
-          filterOption
+          optionFilterProp="label"
         />
       </Form.Item>
 
-      {!compact && (status?.provider_model_pairs?.length ?? 0) === 0 && (
+      {!compact && (pairs?.length ?? 0) === 0 && (
         <Typography.Paragraph type="secondary" style={{ marginTop: -8, fontSize: 12 }}>
           No models found. Set at least one provider API key in User Settings → Pi API Keys, or add
           a custom provider in User Settings → Pi Custom Providers.
@@ -174,11 +183,7 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
           showHelpText ? 'Controls how much reasoning effort Pi applies to problems' : undefined
         }
       >
-        <Select
-          placeholder="Select reasoning effort"
-          options={REASONING_EFFORTS}
-          allowClear
-        />
+        <Select placeholder="Select reasoning effort" options={REASONING_EFFORTS} allowClear />
       </Form.Item>
 
       {!compact && (

@@ -15,12 +15,17 @@
  *
  * These are session-level overrides that affect Pi's runtime behavior.
  */
+/**
+ * Reasoning effort levels accepted by Pi's native reasoning effort setting.
+ */
+export type PiReasoningEffort = 'default' | 'low' | 'medium' | 'high';
+
 export interface PiToolOptions {
   /**
    * Reasoning effort level for Pi sessions.
    * Maps to Pi's native reasoning effort setting.
    */
-  reasoning_effort?: string;
+  reasoning_effort?: PiReasoningEffort;
 
   /**
    * Compaction mode controls how Pi handles context window pressure.
@@ -124,8 +129,9 @@ export interface PiRuntimeStatus {
   version?: string;
 
   /**
-   * Flat list of model ids from the registry (backward-compat with earlier consumers).
-   * Prefer `provider_model_pairs` when provider context is needed.
+   * Flat list of model ids from the registry.
+   * @deprecated Use `provider_model_pairs` instead — it carries provider and
+   * auth context alongside each model id.
    */
   model_suggestions?: string[];
 
@@ -203,6 +209,25 @@ export interface PiAuthProviderStatus {
 
   /** Optional status message (e.g., 'Token expires in 30 days') */
   status_message?: string;
+
+  /**
+   * Whether the provider is built into pi-ai (true) or a user-defined entry
+   * from `~/.pi/agent/models.json` (false). Drives the built-in vs. custom
+   * grouping in the UI without requiring the UI to duplicate pi-ai's catalog.
+   */
+  is_built_in?: boolean;
+
+  /**
+   * URL where users can obtain an API key for this provider, for well-known
+   * commercial providers. Undefined for providers with no public console.
+   */
+  help_url?: string;
+
+  /**
+   * Curated display label for well-known brands (e.g. "OpenAI", "Z.ai") that
+   * differ from the title-cased provider id. Undefined falls back to `name`.
+   */
+  display_label?: string;
 }
 
 /**
