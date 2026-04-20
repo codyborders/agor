@@ -18,6 +18,8 @@ import { Alert, Button, Form, Input, Space, Spin, Switch, Tabs, Tooltip, theme }
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
 import { ApiKeyFields, type ApiKeyStatus } from '../ApiKeyFields';
+import { PiApiKeysTab } from './PiApiKeysTab';
+import { PiCustomProvidersTab } from './PiCustomProvidersTab';
 
 export interface AgenticToolsSectionProps {
   client: AgorClient | null;
@@ -412,6 +414,49 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                 onClear={handleClearKey}
                 onClearError={() => setKeysError(null)}
               />
+            ),
+          },
+          {
+            key: 'pi',
+            label: 'Pi',
+            children: (
+              <div style={{ paddingTop: token.paddingMD }}>
+                <Alert
+                  title={
+                    <span>
+                      Pi keys and custom providers are stored in <code>~/.pi/agent/auth.json</code>{' '}
+                      and <code>~/.pi/agent/models.json</code> on the daemon host — shared across
+                      all users and sessions on this instance.
+                    </span>
+                  }
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: token.marginLG }}
+                />
+                <Tabs
+                  defaultActiveKey="pi-api-keys"
+                  items={[
+                    {
+                      key: 'pi-api-keys',
+                      label: 'API Keys',
+                      children: (
+                        <div style={{ paddingTop: token.paddingSM }}>
+                          <PiApiKeysTab client={client} />
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'pi-custom-providers',
+                      label: 'Custom Providers',
+                      children: (
+                        <div style={{ paddingTop: token.paddingSM }}>
+                          <PiCustomProvidersTab client={client} />
+                        </div>
+                      ),
+                    },
+                  ]}
+                />
+              </div>
             ),
           },
           {
