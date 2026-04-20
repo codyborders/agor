@@ -121,6 +121,19 @@ export interface PiFileDocument {
 }
 
 /**
+ * A provider/model pair from the Pi model registry, exposed for UI pickers.
+ */
+export interface PiProviderModelPair {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning: boolean;
+  context_window: number;
+  input: Array<'text' | 'image'>;
+  has_configured_auth: boolean;
+}
+
+/**
  * Pi runtime status.
  */
 export interface PiRuntimeStatus {
@@ -129,6 +142,7 @@ export interface PiRuntimeStatus {
   project_config_path?: string;
   version?: string;
   model_suggestions?: string[];
+  provider_model_pairs?: PiProviderModelPair[];
   command_catalog?: PiCommandCatalogItem[];
   themes?: string[];
 }

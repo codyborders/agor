@@ -6,8 +6,9 @@ import {
   type GeminiModel,
 } from '@agor/core/models';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip } from 'antd';
+import { Input, Radio, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
+import { usePiRuntimeStatus } from '@/hooks/usePiRuntimeStatus';
 import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
 
 export interface ModelConfig {
@@ -99,6 +100,29 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               mode: 'exact', // OpenCode always uses exact provider+model IDs
               model: openCodeConfig.model,
               provider: openCodeConfig.provider,
+            });
+          }
+        }}
+      />
+    );
+  }
+
+  // Pi gets its own provider+model picker fed by the live Pi registry,
+  // rather than silently falling through to Claude aliases.
+  if (effectiveTool === 'pi') {
+    return (
+      <PiModelPicker
+        value={
+          value?.provider || value?.model
+            ? { provider: value?.provider, model: value?.model }
+            : undefined
+        }
+        onChange={(next) => {
+          if (onChange) {
+            onChange({
+              mode: 'exact',
+              model: next.model ?? '',
+              provider: next.provider,
             });
           }
         }}
@@ -215,6 +239,49 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )}
         </Space>
       </Radio.Group>
+    </Space>
+  );
+};
+
+interface PiModelPickerProps {
+  value?: { provider?: string; model?: string };
+  onChange?: (next: { provider?: string; model?: string }) => void;
+}
+
+const PiModelPicker: React.FC<PiModelPickerProps> = ({ value, onChange }) => {
+  const { status, loading } = usePiRuntimeStatus();
+  const pairs = status?.provider_model_pairs ?? [];
+  const providers = Array.from(new Set(pairs.map((pair) => pair.provider))).sort();
+  const modelsForProvider = value?.provider
+    ? pairs.filter((pair) => pair.provider === value.provider)
+    : pairs;
+
+  return (
+    <Space orientation="vertical" style={{ width: '100%' }}>
+      <Select
+        showSearch
+        placeholder={loading ? 'Loading providers…' : 'Provider'}
+        value={value?.provider}
+        onChange={(provider) => onChange?.({ provider, model: undefined })}
+        options={providers.map((provider) => ({ value: provider, label: provider }))}
+        style={{ width: '100%' }}
+        allowClear
+      />
+      <Select
+        showSearch
+        placeholder={loading ? 'Loading models…' : 'Model'}
+        value={value?.model}
+        onChange={(model) => onChange?.({ provider: value?.provider, model })}
+        options={modelsForProvider.map((pair) => ({
+          value: pair.id,
+          label: `${pair.name}${pair.reasoning ? ' · reasoning' : ''}`,
+        }))}
+        style={{ width: '100%' }}
+        allowClear
+      />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        Configure providers & API keys in User Settings → Pi.
+      </Typography.Text>
     </Space>
   );
 };

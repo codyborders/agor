@@ -40,6 +40,8 @@ import {
 } from '../PiAgentConfigForm/piToolOptionsForm';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
+import { PiApiKeysTab } from './PiApiKeysTab';
+import { PiCustomProvidersTab } from './PiCustomProvidersTab';
 
 const { Sider, Content } = Layout;
 
@@ -444,6 +446,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'api-keys':
       case 'env-vars':
       case 'personal-api-keys':
+      case 'pi-api-keys':
+      case 'pi-custom-providers':
         // These tabs save individually, just close
         handleClose();
         break;
@@ -531,6 +535,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           key: 'pi',
           label: 'Pi',
           icon: <RobotOutlined />,
+        },
+        {
+          key: 'pi-api-keys',
+          label: 'Pi API Keys',
+          icon: <KeyOutlined />,
+        },
+        {
+          key: 'pi-custom-providers',
+          label: 'Pi Custom Providers',
+          icon: <ApiOutlined />,
         },
       ],
     },
@@ -669,11 +683,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         return <AudioSettingsTab user={user} form={audioForm} />;
       case 'personal-api-keys':
         return <PersonalApiKeysTab client={client} />;
+      case 'pi-api-keys':
+        return <PiApiKeysTab client={client} />;
+      case 'pi-custom-providers':
+        return <PiCustomProvidersTab client={client} />;
       case 'claude-code':
       case 'codex':
       case 'gemini':
       case 'opencode':
-      case 'copilot': {
+      case 'copilot':
+      case 'pi': {
         const toolName = activeTab as AgenticToolName;
         const formMap = {
           'claude-code': claudeForm,
@@ -730,6 +749,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       opencode: 'OpenCode',
       copilot: 'GitHub Copilot',
       pi: 'Pi',
+      'pi-api-keys': 'Pi API Keys',
+      'pi-custom-providers': 'Pi Custom Providers',
     };
     return titles[activeTab] || 'User Settings';
   };

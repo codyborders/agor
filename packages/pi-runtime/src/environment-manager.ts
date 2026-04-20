@@ -18,7 +18,7 @@ import {
   ModelRegistry,
   SettingsManager,
 } from '@mariozechner/pi-coding-agent';
-import type { PiPaths, PiRuntimeStatus } from './types.js';
+import type { PiPaths, PiProviderModelPair, PiRuntimeStatus } from './types.js';
 
 export class PiEnvironmentManager {
   private pathsByScope = new Map<string, PiPaths>();
@@ -123,12 +123,14 @@ export class PiEnvironmentManager {
 
     const paths = await this.getPaths(worktreePath);
 
+    const providerModelPairs = await this.getProviderModelPairs(paths);
     const status: PiRuntimeStatus = {
       available: await this.checkAvailability(),
       global_config_path: paths.globalConfigPath,
       project_config_path: paths.projectConfigPath,
       version: await this.getVersion(paths.globalConfigPath),
-      model_suggestions: await this.getModelSuggestions(paths),
+      model_suggestions: providerModelPairs?.map((pair) => pair.id),
+      provider_model_pairs: providerModelPairs,
       command_catalog: await this.getCommandCatalog(paths),
       themes: await this.getThemes(paths),
     };
@@ -164,16 +166,34 @@ export class PiEnvironmentManager {
   }
 
   /**
-   * Get model suggestions from Pi config.
+   * Get provider/model pairs from Pi's model registry.
+   *
+   * The pi-ai ModelRegistry unions built-in providers (anthropic, openai, google,
+   * minimax, zai, etc.) with any custom providers defined in ~/.pi/agent/models.json.
+   * Each entry is annotated with whether auth is configured so UI pickers can warn
+   * the user before they pick a model they cannot run.
    */
-  private async getModelSuggestions(paths: PiPaths): Promise<string[] | undefined> {
+  private async getProviderModelPairs(paths: PiPaths): Promise<PiProviderModelPair[] | undefined> {
     try {
       const authStorage = AuthStorage.create(path.join(paths.globalConfigPath, 'auth.json'));
       const modelRegistry = ModelRegistry.create(
         authStorage,
         path.join(paths.globalConfigPath, 'models.json')
       );
-      return modelRegistry.getAll().map((model) => model.id);
+      const configuredProviders = new Set(authStorage.list());
+      return modelRegistry.getAll().map((model) => ({
+        provider: model.provider,
+        id: model.id,
+        name: model.name ?? model.id,
+        reasoning: Boolean(model.reasoning),
+        context_window: model.contextWindow ?? 0,
+        input: Array.isArray(model.input)
+          ? (model.input.filter((kind) => kind === 'text' || kind === 'image') as Array<
+              'text' | 'image'
+            >)
+          : ['text'],
+        has_configured_auth: configuredProviders.has(model.provider),
+      }));
     } catch {
       return undefined;
     }

@@ -41,6 +41,7 @@ export type {
   ForkSessionOptions,
   PiCompletionResult,
   PiPaths,
+  PiProviderModelPair,
   PiStreamingCallbacks,
   ResumeSessionOptions,
 } from './types.js';
