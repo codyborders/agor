@@ -51,11 +51,18 @@ export async function createExecutorClient(
     reconnectionAttempts: 5, // Allow more retries for transient network hiccups during long-running tasks
   });
 
-  // Re-configure authentication with memory storage
-  // This overrides the default `storage: undefined` for Node.js environments
-  // Import authentication client from @agor/core (re-exported from @feathersjs/authentication-client)
-  const { authenticationClient } = await import('@agor/core/api');
-  client.configure(authenticationClient({ storage }));
+  // Overwrite the app-level storage that createClient installed with ours.
+  // createClient() calls `client.configure(authentication({ storage: undefined }))`
+  // for Node, which persists a `StorageWrapper(undefined)` at
+  // `app.get('storage')`. The auth client's `storage` getter reads that value
+  // live on every setAccessToken/getAccessToken call, so replacing it here
+  // is enough — a second `client.configure(authentication({storage}))` call
+  // wouldn't override it because the auth client constructor reads
+  // `app.get('storage') || options.storage` and short-circuits on the
+  // existing wrapper. Without this, setAccessToken throws
+  // `TypeError: _a.setItem is not a function` because the wrapped storage
+  // is undefined.
+  client.set('storage', storage);
 
   // Connect the socket
   client.io.connect();
