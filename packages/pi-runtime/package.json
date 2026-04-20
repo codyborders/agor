@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@agor/core": "workspace:*",
     "@mariozechner/pi-coding-agent": "^0.66.1"
   },
   "devDependencies": {

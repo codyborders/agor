@@ -7,6 +7,11 @@
 import * as path from 'node:path';
 import { AuthStorage, ModelRegistry } from '@mariozechner/pi-coding-agent';
 import { getPiEnvironmentManager } from './environment-manager.js';
+import {
+  getProviderDisplayLabel,
+  getProviderHelpUrl,
+  isBuiltInProvider,
+} from './provider-metadata.js';
 import type { PiAuthProviderStatus } from './types.js';
 
 export type AuthAction = 'login' | 'logout' | 'set_api_key' | 'clear_api_key';
@@ -68,16 +73,23 @@ export class PiAuthService {
     const oauthProviders = new Set(authStorage.getOAuthProviders().map((provider) => provider.id));
     const providers = await this.listKnownProviders(worktreePath);
 
-    return providers.map((providerId) => ({
-      provider_id: providerId,
-      name: providerId
+    return providers.map((providerId) => {
+      const configured = authStorage.hasAuth(providerId);
+      const titleCasedName = providerId
         .split(/[-_]/)
         .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' '),
-      auth_type: oauthProviders.has(providerId) ? 'oauth' : 'api_key',
-      configured: authStorage.hasAuth(providerId),
-      status_message: authStorage.hasAuth(providerId) ? 'Configured' : undefined,
-    }));
+        .join(' ');
+      return {
+        provider_id: providerId,
+        name: titleCasedName,
+        auth_type: oauthProviders.has(providerId) ? 'oauth' : 'api_key',
+        configured,
+        status_message: configured ? 'Configured' : undefined,
+        is_built_in: isBuiltInProvider(providerId),
+        help_url: getProviderHelpUrl(providerId),
+        display_label: getProviderDisplayLabel(providerId),
+      };
+    });
   }
 
   /**
@@ -117,6 +129,10 @@ export class PiAuthService {
       type: 'api_key',
       key: options.apiKey,
     });
+    // The env manager caches `has_configured_auth` derived from auth.json;
+    // clear the status cache so the next provider_model_pairs read reflects
+    // the new key without waiting for the TTL.
+    this.envManager.invalidateStatus();
   }
 
   /**
@@ -125,6 +141,7 @@ export class PiAuthService {
   async clearAuth(providerId: string, worktreePath?: string): Promise<void> {
     const authStorage = await this.createAuthStorage(worktreePath);
     authStorage.remove(providerId);
+    this.envManager.invalidateStatus();
   }
 
   /**

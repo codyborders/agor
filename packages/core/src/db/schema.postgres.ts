@@ -10,6 +10,7 @@ import type {
   CodexSandboxMode,
   Message,
   PermissionMode,
+  PiReasoningEffort,
   Session,
   Task,
 } from '@agor/core/types';
@@ -534,7 +535,7 @@ export const worktrees = pgTable(
           };
           tool_options?: {
             pi?: {
-              reasoning_effort?: string;
+              reasoning_effort?: PiReasoningEffort;
               compaction_mode?: 'inherit' | 'off' | 'auto' | 'manual';
               compaction_threshold_tokens?: number;
               raw_overrides?: Record<string, unknown>;
@@ -701,7 +702,7 @@ export const users = pgTable(
             mcpServerIds?: string[];
             toolOptions?: {
               pi?: {
-                reasoning_effort?: string;
+                reasoning_effort?: PiReasoningEffort;
                 compaction_mode?: 'inherit' | 'off' | 'auto' | 'manual';
                 compaction_threshold_tokens?: number;
                 raw_overrides?: Record<string, unknown>;

@@ -29,9 +29,17 @@ export type {
   PackageScope,
   UpdatePackageOptions,
 } from './package-service.js';
-
 // Package Service
 export { getPiPackageService, PiPackageService } from './package-service.js';
+// Provider metadata (built-in provider list, help URLs, display labels)
+export {
+  BUILT_IN_PROVIDER_IDS,
+  getProviderDisplayLabel,
+  getProviderHelpUrl,
+  isBuiltInProvider,
+  PROVIDER_DISPLAY_LABELS,
+  PROVIDER_HELP_URLS,
+} from './provider-metadata.js';
 // Session Service
 export { getPiSessionService, PiSessionService } from './session-service.js';
 // Re-export types for consumers
@@ -41,6 +49,7 @@ export type {
   ForkSessionOptions,
   PiCompletionResult,
   PiPaths,
+  PiProviderModelPair,
   PiStreamingCallbacks,
   ResumeSessionOptions,
 } from './types.js';

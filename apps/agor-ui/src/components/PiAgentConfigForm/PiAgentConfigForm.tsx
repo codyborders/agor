@@ -2,7 +2,7 @@
  * Pi Agent Configuration Form
  *
  * Form section for Pi-specific configuration:
- * - Provider and model
+ * - Provider and model (populated from the live Pi model registry)
  * - Reasoning effort
  * - Compaction mode and threshold
  * - Raw override JSON
@@ -10,7 +10,10 @@
  */
 
 import type { MCPServer } from '@agor/core/types';
-import { AutoComplete, Form, Select } from 'antd';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Form, Select, Tooltip, Typography } from 'antd';
+import { useMemo } from 'react';
+import { usePiRuntimeStatus } from '@/hooks/usePiRuntimeStatus';
 import { mapToArray } from '@/utils/mapHelpers';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { MCPServerSelect } from '../MCPServerSelect';
@@ -45,36 +48,133 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
   showHelpText = true,
   compact = false,
 }) => {
+  const { status, loading } = usePiRuntimeStatus();
+  const form = Form.useFormInstance();
+  const selectedProvider = Form.useWatch(['modelConfig', 'provider'], form) as string | undefined;
+
+  // Memoize on the pairs array identity (stable across renders unless the
+  // hook refreshes) instead of the outer `status` object — which the hook
+  // can reallocate even when the underlying data is unchanged.
+  const pairs = status?.provider_model_pairs;
+
+  const { providerOptions, modelOptionsByProvider, allModelOptions } = useMemo(() => {
+    const list = pairs ?? [];
+    const providerMeta = new Map<string, { configured: boolean; modelCount: number }>();
+    const modelsByProvider = new Map<string, Array<{ value: string; label: string }>>();
+
+    for (const pair of list) {
+      const meta = providerMeta.get(pair.provider) ?? { configured: false, modelCount: 0 };
+      meta.modelCount += 1;
+      meta.configured = meta.configured || pair.has_configured_auth;
+      providerMeta.set(pair.provider, meta);
+
+      const modelList = modelsByProvider.get(pair.provider) ?? [];
+      const contextLabel = pair.context_window
+        ? ` · ${Math.round(pair.context_window / 1000)}k ctx`
+        : '';
+      const reasoningLabel = pair.reasoning ? ' · reasoning' : '';
+      modelList.push({
+        value: pair.id,
+        label: `${pair.name}${contextLabel}${reasoningLabel}`,
+      });
+      modelsByProvider.set(pair.provider, modelList);
+    }
+
+    const providers = Array.from(providerMeta.entries())
+      .map(([provider, meta]) => ({
+        value: provider,
+        label: `${provider} · ${meta.modelCount} model${meta.modelCount === 1 ? '' : 's'}${
+          meta.configured ? '' : ' · no auth'
+        }`,
+      }))
+      .sort((first, second) => first.value.localeCompare(second.value));
+
+    const allModels = list
+      .map((pair) => ({
+        value: pair.id,
+        label: `${pair.provider} / ${pair.name}`,
+      }))
+      .sort((first, second) => first.label.localeCompare(second.label));
+
+    return {
+      providerOptions: providers,
+      modelOptionsByProvider: modelsByProvider,
+      allModelOptions: allModels,
+    };
+  }, [pairs]);
+
+  const modelOptions = useMemo(() => {
+    return (selectedProvider && modelOptionsByProvider.get(selectedProvider)) || allModelOptions;
+  }, [selectedProvider, modelOptionsByProvider, allModelOptions]);
+
+  const helpSuffix = loading ? ' · loading registry…' : '';
+
+  let modelHelp: string | undefined;
+  if (showHelpText) {
+    modelHelp = selectedProvider
+      ? `Models offered by ${selectedProvider}.${helpSuffix}`
+      : `All registered Pi models. Pick a provider to narrow the list.${helpSuffix}`;
+  }
+
   return (
     <>
-      <Form.Item name={['modelConfig', 'mode']} hidden>
+      {/* Pi always uses exact provider+model ids; `mode` is stored for parity
+          with the claude-code/codex/gemini model config shape. */}
+      <Form.Item name={['modelConfig', 'mode']} hidden initialValue="exact">
         <input type="hidden" />
       </Form.Item>
 
       <Form.Item
         name={['modelConfig', 'provider']}
-        label="Provider"
+        label={
+          <span>
+            Provider
+            <Tooltip
+              title={
+                <span>
+                  Pi ships with built-in providers (anthropic, openai, google, minimax, zai, …). Add
+                  more in <b>User Settings → Pi Custom Providers</b> and paste keys in{' '}
+                  <b>Pi API Keys</b>.
+                </span>
+              }
+            >
+              <InfoCircleOutlined style={{ marginLeft: 6 }} />
+            </Tooltip>
+          </span>
+        }
         help={
           showHelpText
-            ? 'Optional free-form provider name for Pi runtimes with multiple backends'
+            ? `Pick the Pi provider (auth must be configured in Pi API Keys).${helpSuffix}`
             : undefined
         }
       >
-        <AutoComplete
-          placeholder="e.g., anthropic, openai, local"
-          options={[]}
+        <Select
+          showSearch
+          virtual
+          placeholder="e.g. anthropic, minimax, zai, llama-cpp"
+          options={providerOptions}
           allowClear
-          filterOption
+          optionFilterProp="label"
         />
       </Form.Item>
 
-      <Form.Item
-        name={['modelConfig', 'model']}
-        label="Model"
-        help={showHelpText ? 'Optional exact model identifier for this Pi session' : undefined}
-      >
-        <AutoComplete placeholder="e.g., claude-sonnet-4-6" options={[]} allowClear filterOption />
+      <Form.Item name={['modelConfig', 'model']} label="Model" help={modelHelp}>
+        <Select
+          showSearch
+          virtual
+          placeholder="e.g. glm-5.1, MiniMax-M2.7, claude-sonnet-4-6"
+          options={modelOptions}
+          allowClear
+          optionFilterProp="label"
+        />
       </Form.Item>
+
+      {!compact && (pairs?.length ?? 0) === 0 && (
+        <Typography.Paragraph type="secondary" style={{ marginTop: -8, fontSize: 12 }}>
+          No models found. Set at least one provider API key in User Settings → Pi API Keys, or add
+          a custom provider in User Settings → Pi Custom Providers.
+        </Typography.Paragraph>
+      )}
 
       <Form.Item
         name={['toolOptions', 'pi', 'reasoning_effort']}
@@ -83,14 +183,7 @@ export const PiAgentConfigForm: React.FC<PiAgentConfigFormProps> = ({
           showHelpText ? 'Controls how much reasoning effort Pi applies to problems' : undefined
         }
       >
-        <Select
-          placeholder="Select reasoning effort"
-          options={REASONING_EFFORTS.map(({ value, label }) => ({
-            value,
-            label,
-          }))}
-          allowClear
-        />
+        <Select placeholder="Select reasoning effort" options={REASONING_EFFORTS} allowClear />
       </Form.Item>
 
       {!compact && (

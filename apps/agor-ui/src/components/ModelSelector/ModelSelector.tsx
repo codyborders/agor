@@ -6,22 +6,26 @@ import {
   type GeminiModel,
 } from '@agor/core/models';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip } from 'antd';
-import { useState } from 'react';
+import { Input, Radio, Select, Space, Tooltip, Typography } from 'antd';
+import { useMemo, useState } from 'react';
+import { usePiRuntimeStatus } from '@/hooks/usePiRuntimeStatus';
 import { type OpenCodeModelConfig, OpenCodeModelSelector } from './OpenCodeModelSelector';
 
 export interface ModelConfig {
   mode: 'alias' | 'exact';
   model: string;
-  // OpenCode-specific: provider + model
+  // OpenCode / Pi: provider + model
   provider?: string;
 }
+
+type AgenticToolKey = 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'pi';
 
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
-  agent?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'pi'; // Kept as 'agent' for backwards compat in prop name
-  agentic_tool?: 'claude-code' | 'codex' | 'gemini' | 'opencode' | 'copilot' | 'pi';
+  /** @deprecated Use `agentic_tool` — kept for backwards compat. */
+  agent?: AgenticToolKey;
+  agentic_tool?: AgenticToolKey;
 }
 
 // Codex model options (derived from @agor/core metadata)
@@ -38,6 +42,48 @@ const GEMINI_MODEL_OPTIONS = Object.entries(GEMINI_MODELS).map(([modelId, meta])
   description: meta.description,
 }));
 
+// Copilot models are discovered dynamically via listModels() — use a placeholder.
+const COPILOT_MODEL_OPTIONS = [
+  { id: 'default', label: 'Default', description: 'Use Copilot default model' },
+];
+
+interface ToolMeta {
+  aliasOptions: Array<{ id: string; label?: string; description?: string }>;
+  exactDefault: string;
+  exactPlaceholder: string;
+  docsUrl: string;
+}
+
+// Centralizing per-tool UI metadata avoids nested ternaries that hid the per-
+// tool matrix behind four levels of `?:`. Add a tool here instead of growing a
+// conditional chain.
+const TOOL_META: Record<Exclude<AgenticToolKey, 'opencode' | 'pi'>, ToolMeta> = {
+  'claude-code': {
+    aliasOptions: AVAILABLE_CLAUDE_MODEL_ALIASES,
+    exactDefault: 'claude-sonnet-4-6',
+    exactPlaceholder: 'e.g., claude-opus-4-20250514',
+    docsUrl: 'https://platform.claude.com/docs/en/about-claude/models',
+  },
+  codex: {
+    aliasOptions: CODEX_MODEL_OPTIONS,
+    exactDefault: DEFAULT_CODEX_MODEL,
+    exactPlaceholder: `e.g., ${DEFAULT_CODEX_MODEL}`,
+    docsUrl: 'https://platform.openai.com/docs/models',
+  },
+  gemini: {
+    aliasOptions: GEMINI_MODEL_OPTIONS,
+    exactDefault: 'gemini-2.5-flash',
+    exactPlaceholder: 'e.g., gemini-2.5-pro',
+    docsUrl: 'https://ai.google.dev/gemini-api/docs/models',
+  },
+  copilot: {
+    aliasOptions: COPILOT_MODEL_OPTIONS,
+    exactDefault: 'default',
+    exactPlaceholder: 'e.g., gpt-4o or claude-3.5-sonnet',
+    docsUrl: 'https://github.com/features/copilot',
+  },
+};
+
 /**
  * Model Selector Component
  *
@@ -53,35 +99,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   agent,
   agentic_tool,
 }) => {
-  // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
-  const effectiveTool = agentic_tool || agent || 'claude-code';
+  const effectiveTool: AgenticToolKey = agentic_tool || agent || 'claude-code';
 
-  // Calculate model list (needed for initial mode calculation)
-  // Copilot models are discovered dynamically via listModels() — use a placeholder
-  const COPILOT_MODEL_OPTIONS = [
-    { id: 'default', label: 'Default', description: 'Use Copilot default model' },
-  ];
-
-  const modelList =
-    effectiveTool === 'codex'
-      ? CODEX_MODEL_OPTIONS
-      : effectiveTool === 'gemini'
-        ? GEMINI_MODEL_OPTIONS
-        : effectiveTool === 'opencode'
-          ? [] // OpenCode doesn't use this list
-          : effectiveTool === 'copilot'
-            ? COPILOT_MODEL_OPTIONS
-            : AVAILABLE_CLAUDE_MODEL_ALIASES;
-
-  // Determine initial mode based on whether the value is in the aliases list
-  // If no value provided, default to 'alias' mode (recommended)
-  const isValueInAliases = value?.model ? modelList.some((m) => m.id === value.model) : true; // Default to true when no value (will use alias mode)
+  // Compute initial mode up-front so useState can be called unconditionally
+  // (React hooks must not appear after an early return). For tools that use
+  // their own picker below, aliasOptions is empty and mode is unused.
+  const aliasOptions =
+    effectiveTool === 'opencode' || effectiveTool === 'pi'
+      ? []
+      : TOOL_META[effectiveTool].aliasOptions;
+  const isValueInAliases = value?.model ? aliasOptions.some((m) => m.id === value.model) : true;
   const initialMode = value?.mode || (isValueInAliases ? 'alias' : 'exact');
-
-  // IMPORTANT: Call hooks unconditionally before any early returns (React rules of hooks)
   const [mode, setMode] = useState<'alias' | 'exact'>(initialMode);
 
-  // OpenCode uses a different UI (2 dropdowns: provider + model)
+  // OpenCode and Pi use their own pickers (provider + model).
   if (effectiveTool === 'opencode') {
     return (
       <OpenCodeModelSelector
@@ -94,49 +125,49 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             : undefined
         }
         onChange={(openCodeConfig: OpenCodeModelConfig) => {
-          if (onChange) {
-            onChange({
-              mode: 'exact', // OpenCode always uses exact provider+model IDs
-              model: openCodeConfig.model,
-              provider: openCodeConfig.provider,
-            });
-          }
+          onChange?.({
+            mode: 'exact',
+            model: openCodeConfig.model,
+            provider: openCodeConfig.provider,
+          });
         }}
       />
     );
   }
 
+  if (effectiveTool === 'pi') {
+    return (
+      <PiModelPicker
+        value={
+          value?.provider || value?.model
+            ? { provider: value?.provider, model: value?.model }
+            : undefined
+        }
+        onChange={(next) => {
+          onChange?.({
+            mode: 'exact',
+            model: next.model ?? '',
+            provider: next.provider,
+          });
+        }}
+      />
+    );
+  }
+
+  const meta = TOOL_META[effectiveTool];
+
   const handleModeChange = (newMode: 'alias' | 'exact') => {
     setMode(newMode);
-    if (onChange) {
-      // When switching modes, provide a default model
-      let defaultModel: string;
-      if (newMode === 'alias') {
-        defaultModel = modelList[0].id;
-      } else if (effectiveTool === 'codex') {
-        defaultModel = DEFAULT_CODEX_MODEL;
-      } else if (effectiveTool === 'gemini') {
-        defaultModel = 'gemini-2.5-flash';
-      } else if (effectiveTool === 'copilot') {
-        defaultModel = 'default';
-      } else {
-        // claude-code (opencode is handled earlier in the component)
-        defaultModel = 'claude-sonnet-4-6';
-      }
-      onChange({
-        mode: newMode,
-        model: value?.model || defaultModel,
-      });
-    }
+    if (!onChange) return;
+    const defaultModel = newMode === 'alias' ? aliasOptions[0].id : meta.exactDefault;
+    onChange({
+      mode: newMode,
+      model: value?.model || defaultModel,
+    });
   };
 
   const handleModelChange = (newModel: string) => {
-    if (onChange) {
-      onChange({
-        mode,
-        model: newModel,
-      });
-    }
+    onChange?.({ mode, model: newModel });
   };
 
   return (
@@ -155,10 +186,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           {mode === 'alias' && (
             <div style={{ marginLeft: 24, marginTop: 8 }}>
               <Select
-                value={value?.model || modelList[0].id}
+                value={value?.model || aliasOptions[0].id}
                 onChange={handleModelChange}
                 style={{ width: '100%', minWidth: 400 }}
-                options={modelList.map((m) => ({
+                options={aliasOptions.map((m) => ({
                   value: m.id,
                   label: m.id,
                 }))}
@@ -180,29 +211,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               <Input
                 value={value?.model}
                 onChange={(e) => handleModelChange(e.target.value)}
-                placeholder={
-                  effectiveTool === 'codex'
-                    ? `e.g., ${DEFAULT_CODEX_MODEL}`
-                    : effectiveTool === 'gemini'
-                      ? 'e.g., gemini-2.5-pro'
-                      : effectiveTool === 'copilot'
-                        ? 'e.g., gpt-4o or claude-3.5-sonnet'
-                        : 'e.g., claude-opus-4-20250514' // claude-code (opencode handled earlier)
-                }
+                placeholder={meta.exactPlaceholder}
                 style={{ width: '100%', minWidth: 400 }}
               />
               <div style={{ marginTop: 8, fontSize: 12, color: 'rgba(255, 255, 255, 0.45)' }}>
                 Enter any model ID to pin to a specific version.{' '}
                 <a
-                  href={
-                    effectiveTool === 'codex'
-                      ? 'https://platform.openai.com/docs/models'
-                      : effectiveTool === 'gemini'
-                        ? 'https://ai.google.dev/gemini-api/docs/models'
-                        : effectiveTool === 'copilot'
-                          ? 'https://github.com/features/copilot'
-                          : 'https://platform.claude.com/docs/en/about-claude/models' // claude-code (opencode handled earlier)
-                  }
+                  href={meta.docsUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
@@ -215,6 +230,62 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )}
         </Space>
       </Radio.Group>
+    </Space>
+  );
+};
+
+interface PiModelPickerProps {
+  value?: { provider?: string; model?: string };
+  onChange?: (next: { provider?: string; model?: string }) => void;
+}
+
+const PiModelPicker: React.FC<PiModelPickerProps> = ({ value, onChange }) => {
+  const { status, loading } = usePiRuntimeStatus();
+  const pairs = status?.provider_model_pairs;
+
+  const providerOptions = useMemo(() => {
+    if (!pairs) return [];
+    return Array.from(new Set(pairs.map((pair) => pair.provider)))
+      .sort()
+      .map((provider) => ({ value: provider, label: provider }));
+  }, [pairs]);
+
+  const modelOptions = useMemo(() => {
+    if (!pairs) return [];
+    const scoped = value?.provider
+      ? pairs.filter((pair) => pair.provider === value.provider)
+      : pairs;
+    return scoped.map((pair) => ({
+      value: pair.id,
+      label: `${pair.name}${pair.reasoning ? ' · reasoning' : ''}${
+        pair.has_configured_auth ? '' : ' · no auth'
+      }`,
+    }));
+  }, [pairs, value?.provider]);
+
+  return (
+    <Space orientation="vertical" style={{ width: '100%' }}>
+      <Select
+        showSearch
+        placeholder={loading ? 'Loading providers…' : 'Provider'}
+        value={value?.provider}
+        onChange={(provider) => onChange?.({ provider, model: undefined })}
+        options={providerOptions}
+        style={{ width: '100%' }}
+        allowClear
+      />
+      <Select
+        showSearch
+        placeholder={loading ? 'Loading models…' : 'Model'}
+        value={value?.model}
+        onChange={(model) => onChange?.({ provider: value?.provider, model })}
+        options={modelOptions}
+        style={{ width: '100%' }}
+        allowClear
+      />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        Configure providers & API keys in User Settings → Pi.
+      </Typography.Text>
     </Space>
   );
 };

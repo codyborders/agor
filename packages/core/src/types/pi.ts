@@ -15,12 +15,17 @@
  *
  * These are session-level overrides that affect Pi's runtime behavior.
  */
+/**
+ * Reasoning effort levels accepted by Pi's native reasoning effort setting.
+ */
+export type PiReasoningEffort = 'default' | 'low' | 'medium' | 'high';
+
 export interface PiToolOptions {
   /**
    * Reasoning effort level for Pi sessions.
    * Maps to Pi's native reasoning effort setting.
    */
-  reasoning_effort?: string;
+  reasoning_effort?: PiReasoningEffort;
 
   /**
    * Compaction mode controls how Pi handles context window pressure.
@@ -77,6 +82,37 @@ export interface PiNativeBinding {
 // ============================================================================
 
 /**
+ * Provider/model pair from Pi's model registry, exposed for UI pickers.
+ *
+ * Each entry describes one concrete model, including which provider owns it,
+ * whether the caller already has auth configured for that provider, and the
+ * key metadata needed to render informative dropdowns (context window,
+ * reasoning support, input types).
+ */
+export interface PiProviderModelPair {
+  /** Provider id (e.g. 'anthropic', 'minimax', 'zai', custom ids from models.json) */
+  provider: string;
+
+  /** Model id (e.g. 'MiniMax-M2.7', 'glm-5.1', 'claude-sonnet-4-20250514') */
+  id: string;
+
+  /** Human-readable model name */
+  name: string;
+
+  /** Whether the model supports extended thinking / reasoning effort */
+  reasoning: boolean;
+
+  /** Context window in tokens */
+  context_window: number;
+
+  /** Accepted input modalities */
+  input: Array<'text' | 'image'>;
+
+  /** Whether the provider has an API key or OAuth credential configured in auth.json */
+  has_configured_auth: boolean;
+}
+
+/**
  * Pi runtime status returned by pi-runtime service.
  */
 export interface PiRuntimeStatus {
@@ -92,8 +128,18 @@ export interface PiRuntimeStatus {
   /** Installed Pi version, if available */
   version?: string;
 
-  /** List of discovered model suggestions */
+  /**
+   * Flat list of model ids from the registry.
+   * @deprecated Use `provider_model_pairs` instead — it carries provider and
+   * auth context alongside each model id.
+   */
   model_suggestions?: string[];
+
+  /**
+   * Full provider/model listing from Pi's ModelRegistry (built-in + custom).
+   * Drives the Provider/Model dropdowns in session config UIs.
+   */
+  provider_model_pairs?: PiProviderModelPair[];
 
   /** Available slash commands from Pi and installed packages */
   command_catalog?: PiCommandCatalogItem[];
@@ -163,6 +209,25 @@ export interface PiAuthProviderStatus {
 
   /** Optional status message (e.g., 'Token expires in 30 days') */
   status_message?: string;
+
+  /**
+   * Whether the provider is built into pi-ai (true) or a user-defined entry
+   * from `~/.pi/agent/models.json` (false). Drives the built-in vs. custom
+   * grouping in the UI without requiring the UI to duplicate pi-ai's catalog.
+   */
+  is_built_in?: boolean;
+
+  /**
+   * URL where users can obtain an API key for this provider, for well-known
+   * commercial providers. Undefined for providers with no public console.
+   */
+  help_url?: string;
+
+  /**
+   * Curated display label for well-known brands (e.g. "OpenAI", "Z.ai") that
+   * differ from the title-cased provider id. Undefined falls back to `name`.
+   */
+  display_label?: string;
 }
 
 /**

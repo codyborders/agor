@@ -18,11 +18,37 @@ import {
   ModelRegistry,
   SettingsManager,
 } from '@mariozechner/pi-coding-agent';
-import type { PiPaths, PiRuntimeStatus } from './types.js';
+import type {
+  PiCommandCatalogItem,
+  PiPaths,
+  PiProviderModelPair,
+  PiRuntimeStatus,
+} from './types.js';
+
+/**
+ * Status cache entry with expiry timestamp. A short TTL prevents a long-lived
+ * daemon from serving years-old registry data, while still avoiding a cold
+ * recomputation on every UI open.
+ */
+interface CachedStatus {
+  status: PiRuntimeStatus;
+  expires_at_ms: number;
+}
+
+/** Status cache lifetime in milliseconds. Intentionally short. */
+const STATUS_CACHE_TTL_MS = 15_000;
+
+function logWarn(scope: string, error: unknown): void {
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  // Keep structured so logs are grepable; avoid leaking any apiKey values —
+  // pi-ai errors do not embed auth material, and we deliberately don't include
+  // raw stacks in the line.
+  console.warn(`[pi-runtime] ${scope} failed: ${detail}`);
+}
 
 export class PiEnvironmentManager {
   private pathsByScope = new Map<string, PiPaths>();
-  private statusByScope = new Map<string, PiRuntimeStatus>();
+  private statusByScope = new Map<string, CachedStatus>();
 
   private getScopeKey(worktreePath?: string): string {
     if (!worktreePath) {
@@ -103,7 +129,8 @@ export class PiEnvironmentManager {
           paths.projectSessionsPath = this.expandConfiguredPath(projectSessionDir, cwd);
         }
       } catch {
-        // Project-level Pi doesn't exist yet
+        // Project-level Pi doesn't exist yet — expected when the project has
+        // no .pi directory; stays silent.
       }
     }
 
@@ -112,41 +139,58 @@ export class PiEnvironmentManager {
   }
 
   /**
-   * Get Pi runtime status.
+   * Get Pi runtime status. Cache entries honor STATUS_CACHE_TTL_MS to avoid
+   * serving multi-minute-stale registry data after a user writes to
+   * auth.json or models.json. The pi-auth and pi-files daemon services also
+   * call invalidateStatus() on write so users see changes immediately.
    */
   async getStatus(worktreePath?: string): Promise<PiRuntimeStatus> {
     const scopeKey = this.getScopeKey(worktreePath);
     const cachedStatus = this.statusByScope.get(scopeKey);
-    if (cachedStatus) {
-      return cachedStatus;
+    if (cachedStatus && cachedStatus.expires_at_ms > Date.now()) {
+      return cachedStatus.status;
     }
 
     const paths = await this.getPaths(worktreePath);
 
+    // Independent lookups run in parallel. Each inner helper already catches
+    // and logs its own errors, so Promise.all resolves even if individual
+    // probes fail (returning undefined/[] in place of the failed value).
+    const [available, version, providerModelPairs, commandCatalog, themes] = await Promise.all([
+      this.checkAvailability(),
+      this.getVersion(paths.globalConfigPath),
+      this.getProviderModelPairs(paths),
+      this.getCommandCatalog(paths),
+      this.getThemes(paths),
+    ]);
+
     const status: PiRuntimeStatus = {
-      available: await this.checkAvailability(),
+      available,
       global_config_path: paths.globalConfigPath,
       project_config_path: paths.projectConfigPath,
-      version: await this.getVersion(paths.globalConfigPath),
-      model_suggestions: await this.getModelSuggestions(paths),
-      command_catalog: await this.getCommandCatalog(paths),
-      themes: await this.getThemes(paths),
+      version,
+      model_suggestions: providerModelPairs?.map((pair) => pair.id),
+      provider_model_pairs: providerModelPairs,
+      command_catalog: commandCatalog,
+      themes,
     };
 
-    this.statusByScope.set(scopeKey, status);
+    this.statusByScope.set(scopeKey, {
+      status,
+      expires_at_ms: Date.now() + STATUS_CACHE_TTL_MS,
+    });
     return status;
   }
 
   /**
    * Check if Pi SDK is available.
+   *
+   * The pi-coding-agent module is already statically imported at the top of
+   * this file, so import-time failures would have crashed the daemon. Return
+   * true directly rather than re-importing on every status read.
    */
   private async checkAvailability(): Promise<boolean> {
-    try {
-      const pi = await import('@mariozechner/pi-coding-agent');
-      return pi !== null;
-    } catch {
-      return false;
-    }
+    return true;
   }
 
   /**
@@ -157,41 +201,73 @@ export class PiEnvironmentManager {
       const packageJsonPath = path.join(globalConfigPath, '..', 'package.json');
       const packageJson = await fs.readFile(packageJsonPath, 'utf-8');
       const { version } = JSON.parse(packageJson);
-      return version;
-    } catch {
+      return typeof version === 'string' ? version : undefined;
+    } catch (error) {
+      // ENOENT when Pi has never been initialized under ~/.pi; quiet.
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code !== 'ENOENT') {
+        logWarn('getVersion', error);
+      }
       return undefined;
     }
   }
 
   /**
-   * Get model suggestions from Pi config.
+   * Get provider/model pairs from Pi's model registry.
+   *
+   * The pi-ai ModelRegistry unions built-in providers (anthropic, openai, google,
+   * minimax, zai, etc.) with any custom providers defined in ~/.pi/agent/models.json.
+   * Each entry is annotated with whether auth is configured so UI pickers can warn
+   * the user before they pick a model they cannot run.
    */
-  private async getModelSuggestions(paths: PiPaths): Promise<string[] | undefined> {
+  private async getProviderModelPairs(paths: PiPaths): Promise<PiProviderModelPair[] | undefined> {
     try {
       const authStorage = AuthStorage.create(path.join(paths.globalConfigPath, 'auth.json'));
       const modelRegistry = ModelRegistry.create(
         authStorage,
         path.join(paths.globalConfigPath, 'models.json')
       );
-      return modelRegistry.getAll().map((model) => model.id);
-    } catch {
+      const configuredProviders = new Set(authStorage.list());
+      return modelRegistry.getAll().map((model) => ({
+        provider: model.provider,
+        id: model.id,
+        name: model.name ?? model.id,
+        reasoning: Boolean(model.reasoning),
+        context_window: model.contextWindow ?? 0,
+        input: Array.isArray(model.input)
+          ? (model.input.filter((kind) => kind === 'text' || kind === 'image') as Array<
+              'text' | 'image'
+            >)
+          : ['text'],
+        has_configured_auth: configuredProviders.has(model.provider),
+      }));
+    } catch (error) {
+      logWarn('getProviderModelPairs', error);
       return undefined;
     }
   }
 
   /**
+   * Build a DefaultResourceLoader shared by getCommandCatalog and getThemes.
+   * Each cold status recomputes this once per scope so we don't do the same
+   * disk scan twice per call.
+   */
+  private async loadResources(paths: PiPaths): Promise<DefaultResourceLoader> {
+    const settingsManager = SettingsManager.create(undefined, paths.globalConfigPath);
+    const loader = new DefaultResourceLoader({
+      agentDir: paths.globalConfigPath,
+      settingsManager,
+    });
+    await loader.reload();
+    return loader;
+  }
+
+  /**
    * Get available commands from Pi.
    */
-  private async getCommandCatalog(
-    paths: PiPaths
-  ): Promise<PiRuntimeStatus['command_catalog'] | undefined> {
+  private async getCommandCatalog(paths: PiPaths): Promise<PiCommandCatalogItem[] | undefined> {
     try {
-      const settingsManager = SettingsManager.create(undefined, paths.globalConfigPath);
-      const loader = new DefaultResourceLoader({
-        agentDir: paths.globalConfigPath,
-        settingsManager,
-      });
-      await loader.reload();
+      const loader = await this.loadResources(paths);
       return loader.getExtensions().extensions.flatMap((extension) =>
         Array.from(extension.commands.values()).map((command) => ({
           name: `/${command.name}`,
@@ -200,7 +276,8 @@ export class PiEnvironmentManager {
           is_slash_command: true,
         }))
       );
-    } catch {
+    } catch (error) {
+      logWarn('getCommandCatalog', error);
       return [];
     }
   }
@@ -210,12 +287,7 @@ export class PiEnvironmentManager {
    */
   private async getThemes(paths: PiPaths): Promise<string[] | undefined> {
     try {
-      const settingsManager = SettingsManager.create(undefined, paths.globalConfigPath);
-      const loader = new DefaultResourceLoader({
-        agentDir: paths.globalConfigPath,
-        settingsManager,
-      });
-      await loader.reload();
+      const loader = await this.loadResources(paths);
       return loader
         .getThemes()
         .themes.map((theme) => {
@@ -230,16 +302,28 @@ export class PiEnvironmentManager {
           return undefined;
         })
         .filter((themeName): themeName is string => Boolean(themeName));
-    } catch {
+    } catch (error) {
+      logWarn('getThemes', error);
       return [];
     }
   }
 
   /**
-   * Invalidate cached values.
+   * Invalidate cached paths and status. Called by pi-auth / pi-files when the
+   * user writes an API key or edits models.json, so the next getStatus() sees
+   * the change immediately instead of waiting for the TTL.
    */
   invalidateCache(): void {
     this.pathsByScope.clear();
+    this.statusByScope.clear();
+  }
+
+  /**
+   * Invalidate only the status cache. Cheaper than invalidateCache() when the
+   * mutation could not possibly have changed filesystem paths (e.g., an auth
+   * key write leaves paths stable).
+   */
+  invalidateStatus(): void {
     this.statusByScope.clear();
   }
 
@@ -258,7 +342,7 @@ export class PiEnvironmentManager {
         await fs.access(projectConfigPath);
         return projectConfigPath;
       } catch {
-        // Fall through to global
+        // Fall through to global — project-level file just doesn't exist.
       }
     }
 
