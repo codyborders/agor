@@ -30,6 +30,7 @@ import {
   AuthStorage,
   createAgentSession,
   createCodingTools,
+  DefaultResourceLoader,
   ModelRegistry,
   SessionManager,
   SettingsManager,
@@ -404,6 +405,21 @@ export async function executePiTask(params: {
       builtInToolNames: new Set(builtInTools.map((tool) => tool.name)),
     });
 
+    // Build a resource loader that skips the per-skill `<available_skills>`
+    // block Pi would otherwise inject into the system prompt. With a full
+    // ~/.pi/agent/skills/ directory (Agor users commonly have 100+ skills
+    // shared with Claude Code / the CLI), that block is ~150 tokens per
+    // skill and dominates the prompt for short chats on local models. Users
+    // who want skill auto-discovery in a specific session can opt in via
+    // `tool_options.pi.enable_skills`.
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: worktreePath,
+      agentDir,
+      settingsManager,
+      noSkills: session.tool_options?.pi?.enable_skills !== true,
+    });
+    await resourceLoader.reload();
+
     const { session: piSession } = await createAgentSession({
       cwd: worktreePath,
       agentDir,
@@ -413,6 +429,7 @@ export async function executePiTask(params: {
       thinkingLevel,
       tools: builtInTools,
       customTools,
+      resourceLoader,
       sessionManager,
       settingsManager,
     });

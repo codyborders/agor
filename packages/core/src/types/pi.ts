@@ -47,6 +47,15 @@ export interface PiToolOptions {
    * Use for experimental or Pi-internal settings not yet typed here.
    */
   raw_overrides?: Record<string, unknown>;
+
+  /**
+   * Opt in to Pi's skill auto-discovery — the `<available_skills>` XML block
+   * listing every skill in `~/.pi/agent/skills/` by name+description. Off by
+   * default in Agor because the block costs ~150 tokens per skill (users
+   * typically have 100+ shared with Claude Code). Turn on for sessions where
+   * you actively want the model to pick skills from the catalog.
+   */
+  enable_skills?: boolean;
 }
 
 /**
